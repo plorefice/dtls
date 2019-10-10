@@ -20,19 +20,20 @@ struct Node {
     children: Vec<Node>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Property {
     name: String,
-    value: PropertyValue,
+    value: Option<Vec<PropertyValue>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum PropertyValue {
-    Empty,
-    U32(u32),
-    U64(u64),
     Str(String),
-    Phandle(String),
-    StringList(Vec<PropertyValue>),
-    PropEncodedArray(Vec<PropertyValue>),
+    CellArray(Vec<PropertyCell>),
+}
+
+#[derive(Debug, PartialEq)]
+enum PropertyCell {
+    U32(u32),
+    Ref(String),
 }

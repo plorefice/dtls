@@ -2,28 +2,91 @@ use super::*;
 
 use nom::{
     branch::alt,
-    bytes::complete::{is_a, tag, take_till, take_while1},
+    bytes::complete::{is_a, is_not, tag, take_till, take_while1},
     character::complete::{alpha1, alphanumeric1, digit1, hex_digit1},
     combinator::{map_res, opt, recognize},
-    multi::{many0, many1},
-    sequence::{pair, preceded, terminated, tuple},
+    multi::{many0, many1, separated_list},
+    sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, IResult,
 };
+
+use std::convert::Infallible;
+
+/// Parse a node property.
+fn property(input: &[u8]) -> IResult<&[u8], Property> {
+    map_res(
+        tuple((
+            lexeme(prop_name),
+            opt(preceded(
+                symbol(b"="),
+                separated_list(symbol(b","), alt((prop_value_cell_array, prop_value_str))),
+            )),
+            symbol(b";"),
+        )),
+        |(name, value, _)| {
+            Ok(Property {
+                name: String::from_utf8_lossy(name).to_string(),
+                value,
+            }) as Result<_, Infallible>
+        },
+    )(input)
+}
+
+/// Parse a property value corresponding to a string.
+fn prop_value_str(input: &[u8]) -> IResult<&[u8], PropertyValue> {
+    map_res(string_literal, |s| {
+        Ok(PropertyValue::Str(String::from_utf8_lossy(s).to_string())) as Result<_, Infallible>
+    })(input)
+}
+
+/// Parse a property value corresponding to a cell array.
+fn prop_value_cell_array(input: &[u8]) -> IResult<&[u8], PropertyValue> {
+    map_res(
+        delimited(
+            symbol(b"<"),
+            many1(alt((prop_cell_u32, prop_cell_ref))),
+            symbol(b">"),
+        ),
+        |v| Ok(PropertyValue::CellArray(v)) as Result<_, Infallible>,
+    )(input)
+}
+
+/// Parse a property cell containing a reference to another node.
+fn prop_cell_ref(input: &[u8]) -> IResult<&[u8], PropertyCell> {
+    map_res(node_reference, |r| {
+        Ok(PropertyCell::Ref(String::from_utf8_lossy(r).to_string())) as Result<_, Infallible>
+    })(input)
+}
+
+/// Parse a property cell containing a 32-bit integer cell.
+fn prop_cell_u32(input: &[u8]) -> IResult<&[u8], PropertyCell> {
+    map_res(numeric_literal, |n| {
+        Ok(PropertyCell::U32(n)) as Result<_, Infallible>
+    })(input)
+}
 
 /// Parse a valid property name.
 fn prop_name(input: &[u8]) -> IResult<&[u8], &[u8]> {
     recognize(many1(alt((alphanumeric1, is_a(",._+?#-")))))(input)
 }
 
+/// Parse a valid node reference.
+fn node_reference(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    lexeme(preceded(symbol(b"&"), node_label))(input)
+}
+
 /// Parse a valid node label.
 fn node_label(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    recognize(many1(alt((alphanumeric1, symbol(b"_")))))(input)
+    lexeme(recognize(many1(alt((alphanumeric1, symbol(b"_"))))))(input)
 }
 
 /// Parse a valid node name.
 /// A node name has composed of a node-name part and an optional node-address in hex format.
 fn node_name(input: &[u8]) -> IResult<&[u8], (&[u8], Option<u32>)> {
-    pair(node_name_identifier, opt(preceded(symbol(b"@"), hex)))(input)
+    lexeme(pair(
+        node_name_identifier,
+        opt(preceded(symbol(b"@"), unprefixed_hex)),
+    ))(input)
 }
 
 /// Parse a valid node name identifier,
@@ -35,24 +98,35 @@ fn node_name_identifier(input: &[u8]) -> IResult<&[u8], &[u8]> {
     ))(input)
 }
 
-/* === Utility functions === */
-
 /// Parse a valid number in any base.
-fn number(input: &[u8]) -> IResult<&[u8], u32> {
+fn numeric_literal(input: &[u8]) -> IResult<&[u8], u32> {
     lexeme(alt((hex, dec)))(input)
 }
 
-/// Parse a natural number in base 16.
+/// Parse a valid string literal.
+fn string_literal(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    lexeme(delimited(symbol(b"\""), is_not("\""), symbol(b"\"")))(input)
+}
+
+/* === Utility functions === */
+
+/// Parse a natural number in base 16, without `0x` prefix.
+fn unprefixed_hex(input: &[u8]) -> IResult<&[u8], u32> {
+    map_res(hex_digit1, |input| {
+        u32::from_str_radix(std::str::from_utf8(input).unwrap(), 16)
+    })(input)
+}
+
+/// Parse a natural number in base 16, prefixed by `0x`.
 fn hex(input: &[u8]) -> IResult<&[u8], u32> {
-    let (input, _) = opt(symbol(b"0x"))(input)?;
-    map_res(lexeme(hex_digit1), |input| {
+    map_res(preceded(symbol(b"0x"), hex_digit1), |input| {
         u32::from_str_radix(std::str::from_utf8(input).unwrap(), 16)
     })(input)
 }
 
 /// Parse a natural number in base 10.
 fn dec(input: &[u8]) -> IResult<&[u8], u32> {
-    map_res(lexeme(digit1), |input| {
+    map_res(digit1, |input| {
         u32::from_str_radix(std::str::from_utf8(input).unwrap(), 10)
     })(input)
 }
@@ -183,6 +257,81 @@ mod tests {
         .into_iter()
         {
             assert_eq!(prop_name(name.as_bytes()), Ok((&b""[..], name.as_bytes())));
+        }
+    }
+
+    #[test]
+    fn parse_properties() {
+        use PropertyCell::*;
+        use PropertyValue::*;
+
+        for (input, prop) in vec![
+            (
+                r#"device_type = "cpu";"#,
+                Property {
+                    name: String::from("device_type"),
+                    value: Some(vec![Str(String::from("cpu"))]),
+                },
+            ),
+            (
+                r#"compatible = "ns16550", "ns8250";"#,
+                Property {
+                    name: String::from("compatible"),
+                    value: Some(vec![
+                        Str(String::from("ns16550")),
+                        Str(String::from("ns8250")),
+                    ]),
+                },
+            ),
+            (
+                r#"example = <&mpic 0xf00f0000 19>, "a strange property format";"#,
+                Property {
+                    name: String::from("example"),
+                    value: Some(vec![
+                        CellArray(vec![Ref(String::from("mpic")), U32(0xf00f_0000), U32(19)]),
+                        Str(String::from("a strange property format")),
+                    ]),
+                },
+            ),
+            (
+                r#"reg = <0>;"#,
+                Property {
+                    name: String::from("reg"),
+                    value: Some(vec![CellArray(vec![U32(0)])]),
+                },
+            ),
+            (
+                r#"cache-unified;"#,
+                Property {
+                    name: String::from("cache-unified"),
+                    value: None,
+                },
+            ),
+            (
+                r#"cache-size = <0x8000>;"#,
+                Property {
+                    name: String::from("cache-size"),
+                    value: Some(vec![CellArray(vec![U32(0x8000)])]),
+                },
+            ),
+            (
+                r#"next-level-cache = <&L2_0>;"#,
+                Property {
+                    name: String::from("next-level-cache"),
+                    value: Some(vec![CellArray(vec![Ref(String::from("L2_0"))])]),
+                },
+            ),
+            (
+                r#"interrupts = <17 0xc>;"#,
+                Property {
+                    name: String::from("interrupts"),
+                    value: Some(vec![CellArray(vec![U32(17), U32(0xc)])]),
+                },
+            ),
+        ]
+        .into_iter()
+        {
+            assert_eq!(property(input.as_bytes()), Ok((&b""[..], prop)));
         }
     }
 }
