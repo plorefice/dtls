@@ -5,14 +5,19 @@ use nom::{
     bytes::complete::{is_a, tag, take_till, take_while1},
     character::complete::{alpha1, alphanumeric1, digit1, hex_digit1},
     combinator::{map_res, opt, recognize},
-    multi::many0,
+    multi::{many0, many1},
     sequence::{pair, preceded, terminated, tuple},
     AsChar, IResult,
 };
 
+/// Parse a valid property name.
+fn prop_name(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    recognize(many1(alt((alphanumeric1, is_a(",._+?#-")))))(input)
+}
+
 /// Parse a valid node label.
 fn node_label(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    recognize(many0(alt((alphanumeric1, symbol(b"_")))))(input)
+    recognize(many1(alt((alphanumeric1, symbol(b"_")))))(input)
 }
 
 /// Parse a valid node name.
@@ -83,12 +88,14 @@ fn skip_line_comment(input: &[u8]) -> IResult<&[u8], &[u8]> {
     preceded(symbol(b"//"), take_till(|c: u8| c == b'\n'))(input)
 }
 
+/* === Unit Tests === */
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn match_whitespaces() {
+    fn parse_whitespaces() {
         for (input, (rest, matched)) in vec![
             (" ", ("", " ")),
             ("   ", ("", "   ")),
@@ -110,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn match_line_comments() {
+    fn parse_line_comments() {
         assert_eq!(
             skip_line_comment(b"// This is a comment"),
             Ok((&b""[..], &b"This is a comment"[..]))
@@ -125,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn match_node_name() {
+    fn parse_node_names() {
         for (input, (name, address)) in vec![
             ("/", ("/", None)),
             ("cpus", ("cpus", None)),
@@ -150,12 +157,32 @@ mod tests {
     }
 
     #[test]
-    fn match_node_label() {
-        for label in ["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"].iter() {
+    fn parse_node_labels() {
+        for label in vec!["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"].into_iter() {
             assert_eq!(
                 node_label(label.as_bytes()),
                 Ok((&b""[..], label.as_bytes()))
             );
+        }
+    }
+
+    #[test]
+    fn parse_prop_names() {
+        for name in vec![
+            "reg",
+            "status",
+            "compatible",
+            "device_type",
+            "#size-cells",
+            "#address-cells",
+            "interrupt-controller",
+            "fsl,channel-fifo-len",
+            "ibm,ppc-interrupt-server#s",
+            "linux,network-index",
+        ]
+        .into_iter()
+        {
+            assert_eq!(prop_name(name.as_bytes()), Ok((&b""[..], name.as_bytes())));
         }
     }
 }
