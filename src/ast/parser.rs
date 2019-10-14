@@ -32,6 +32,8 @@ fn dts_file(input: &[u8]) -> IResult<&[u8], Dts> {
         Node(Node),
     };
 
+    // Trim leading commends/spaces
+    let (input, _) = sc(input)?;
     let (input, version) = version_directive(input)?;
 
     map(
