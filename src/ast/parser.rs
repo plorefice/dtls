@@ -14,15 +14,25 @@ use nom::{
     IResult,
 };
 
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Dts> {
-    let dts = std::fs::read(path)?;
+/// Parse a Device Tree source file.
+pub fn parse<R: Read>(r: &mut R) -> Result<Dts> {
+    let mut dts = Vec::new();
+    r.read_to_end(&mut dts)?;
+
     Ok(dts_file(&dts)
         .map_err(|e| format_err!("nom error: {:?}", e))?
         .1)
+}
+
+/// Parse a Device Tree source file.
+pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Dts> {
+    parse(&mut File::open(path)?)
 }
 
 /// Parse a Device Tree source file.
