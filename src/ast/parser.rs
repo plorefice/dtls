@@ -1,5 +1,7 @@
 use super::*;
 
+use failure::{format_err, Error};
+
 use nom::{
     branch::alt,
     bytes::complete::{is_a, is_not, tag},
@@ -11,6 +13,17 @@ use nom::{
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
+
+use std::path::Path;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Dts> {
+    let dts = std::fs::read(path)?;
+    Ok(dts_file(&dts)
+        .map_err(|e| format_err!("nom error: {:?}", e))?
+        .1)
+}
 
 /// Parse a Device Tree source file.
 fn dts_file(input: &[u8]) -> IResult<&[u8], Dts> {

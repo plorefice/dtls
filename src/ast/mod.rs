@@ -1,20 +1,21 @@
 mod parser;
 
-use parser::*;
+pub use parser::*;
 
-struct Dts {
+#[derive(Debug)]
+pub struct Dts {
     includes: Vec<Include>,
     nodes: Vec<Node>,
 }
 
 #[derive(Debug, PartialEq)]
-enum Include {
+pub enum Include {
     Local(String),
     Global(String),
 }
 
 #[derive(Debug, PartialEq)]
-struct Node {
+pub struct Node {
     name: String,
     label: Option<String>,
     address: Option<u32>,
@@ -23,19 +24,19 @@ struct Node {
 }
 
 #[derive(Debug, PartialEq)]
-struct Property {
+pub struct Property {
     name: String,
     value: Option<Vec<PropertyValue>>,
 }
 
 #[derive(Debug, PartialEq)]
-enum PropertyValue {
+pub enum PropertyValue {
     Str(String),
     CellArray(Vec<PropertyCell>),
 }
 
 #[derive(Debug, PartialEq)]
-enum PropertyCell {
+pub enum PropertyCell {
     U32(u32),
     Ref(String),
 }

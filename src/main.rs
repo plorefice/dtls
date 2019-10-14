@@ -1,5 +1,5 @@
 mod ast;
 
 fn main() {
-    println!("Hello, world!");
+    println!("{:#?}", ast::parse_file(std::env::args().nth(1).unwrap()));
 }
