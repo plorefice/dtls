@@ -136,7 +136,10 @@ fn property(input: &[u8]) -> IResult<&[u8], Property> {
             lexeme(prop_name),
             opt(preceded(
                 symbol(b"="),
-                separated_list(symbol(b","), alt((prop_value_cell_array, prop_value_str))),
+                separated_list(
+                    symbol(b","),
+                    alt((prop_value_cell_array, prop_value_alias, prop_value_str)),
+                ),
             )),
             symbol(b";"),
         )),
@@ -145,6 +148,13 @@ fn property(input: &[u8]) -> IResult<&[u8], Property> {
             value,
         },
     )(input)
+}
+
+/// Parse a property value corresponding to a reference to another node.
+fn prop_value_alias(input: &[u8]) -> IResult<&[u8], PropertyValue> {
+    map(node_reference, |r| {
+        PropertyValue::Alias(String::from_utf8_lossy(r).to_string())
+    })(input)
 }
 
 /// Parse a property value corresponding to a string.
@@ -430,6 +440,13 @@ mod tests {
                 Property {
                     name: String::from("interrupts"),
                     value: Some(vec![CellArray(vec![U32(17), U32(0xc)])]),
+                },
+            ),
+            (
+                r#"serial0 = &usart3;"#,
+                Property {
+                    name: String::from("serial0"),
+                    value: Some(vec![Alias(String::from("usart3"))]),
                 },
             ),
         ]

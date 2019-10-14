@@ -12,7 +12,7 @@ pub struct Dts {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DtsVersion {
     V0,
-    V1
+    V1,
 }
 
 #[derive(Debug, PartialEq)]
@@ -39,6 +39,7 @@ pub struct Property {
 #[derive(Debug, PartialEq)]
 pub enum PropertyValue {
     Str(String),
+    Alias(String),
     CellArray(Vec<PropertyCell>),
 }
 
