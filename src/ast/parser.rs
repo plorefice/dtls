@@ -12,6 +12,47 @@ use nom::{
     IResult,
 };
 
+/// Parse a Device Tree source file.
+fn dts_file(input: &[u8]) -> IResult<&[u8], Dts> {
+    enum FileContent {
+        Include(Include),
+        Node(Node),
+    };
+
+    map(
+        many0(alt((
+            map(include, FileContent::Include),
+            map(node, FileContent::Node),
+        ))),
+        |contents| {
+            contents.into_iter().fold(
+                Dts {
+                    includes: vec![],
+                    nodes: vec![],
+                },
+                |mut dts, elem| {
+                    match elem {
+                        FileContent::Include(i) => dts.includes.push(i),
+                        FileContent::Node(n) => dts.nodes.push(n),
+                    };
+                    dts
+                },
+            )
+        },
+    )(input)
+}
+
+/// Parse an include directive.
+fn include(input: &[u8]) -> IResult<&[u8], Include> {
+    preceded(
+        symbol(b"#include"),
+        alt((
+            map(include_path, Include::Global),
+            map(string_literal, Include::Local),
+        )),
+    )(input)
+}
+
 /// Parse a device tree node.
 fn node(input: &[u8]) -> IResult<&[u8], Node> {
     map(
@@ -80,9 +121,7 @@ fn property(input: &[u8]) -> IResult<&[u8], Property> {
 
 /// Parse a property value corresponding to a string.
 fn prop_value_str(input: &[u8]) -> IResult<&[u8], PropertyValue> {
-    map(string_literal, |s| {
-        PropertyValue::Str(String::from_utf8_lossy(s).to_string())
-    })(input)
+    map(string_literal, PropertyValue::Str)(input)
 }
 
 /// Parse a property value corresponding to a cell array.
@@ -147,9 +186,20 @@ fn numeric_literal(input: &[u8]) -> IResult<&[u8], u32> {
     lexeme(alt((hex, dec)))(input)
 }
 
+/// Parse a valid global include path.
+fn include_path(input: &[u8]) -> IResult<&[u8], String> {
+    map(
+        lexeme(delimited(symbol(b"<"), is_not(">"), symbol(b">"))),
+        |s| String::from_utf8_lossy(s).to_string(),
+    )(input)
+}
+
 /// Parse a valid string literal.
-fn string_literal(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    lexeme(delimited(symbol(b"\""), is_not("\""), symbol(b"\"")))(input)
+fn string_literal(input: &[u8]) -> IResult<&[u8], String> {
+    map(
+        lexeme(delimited(symbol(b"\""), is_not("\""), symbol(b"\""))),
+        |s| String::from_utf8_lossy(s).to_string(),
+    )(input)
 }
 
 /* === Utility functions === */
@@ -483,6 +533,18 @@ mod tests {
                     ]
                 }
             ))
+        );
+    }
+
+    #[test]
+    fn parse_includes() {
+        assert_eq!(
+            include(br#"#include <arm/pinctrl.h>"#),
+            Ok((&b""[..], Include::Global(String::from("arm/pinctrl.h"))))
+        );
+        assert_eq!(
+            include(br#"#include "sama5.dtsi""#),
+            Ok((&b""[..], Include::Local(String::from("sama5.dtsi"))))
         );
     }
 }

@@ -7,7 +7,7 @@ struct Dts {
     nodes: Vec<Node>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Include {
     Local(String),
     Global(String),
