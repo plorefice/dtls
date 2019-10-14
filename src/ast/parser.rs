@@ -2,19 +2,67 @@ use super::*;
 
 use nom::{
     branch::alt,
-    bytes::complete::{is_a, is_not, tag, take_till, take_while1},
-    character::complete::{alpha1, alphanumeric1, digit1, hex_digit1},
-    combinator::{map_res, opt, recognize},
-    multi::{many0, many1, separated_list},
+    bytes::complete::{is_a, is_not, tag},
+    character::complete::{
+        alpha1, alphanumeric1, anychar, digit1, hex_digit1, line_ending, multispace1,
+    },
+    combinator::{map, map_res, opt, recognize},
+    multi::{many0, many1, many_till, separated_list},
     sequence::{delimited, pair, preceded, terminated, tuple},
-    AsChar, IResult,
+    IResult,
 };
 
-use std::convert::Infallible;
+/// Parse a device tree node.
+fn node(input: &[u8]) -> IResult<&[u8], Node> {
+    map(
+        tuple((
+            opt(terminated(node_label, symbol(b":"))),
+            node_name,
+            delimited(symbol(b"{"), node_contents, symbol(b"}")),
+            symbol(b";"),
+        )),
+        |(label, (name, address), (props, children), _)| Node {
+            name: String::from_utf8_lossy(name).to_string(),
+            label: label.and_then(|label| Some(String::from_utf8_lossy(label).to_string())),
+            address,
+            props,
+            children,
+        },
+    )(input)
+}
+
+/// Parse the contents of a node.
+fn node_contents(input: &[u8]) -> IResult<&[u8], (Vec<Property>, Vec<Node>)> {
+    enum NodeContent {
+        Prop(Property),
+        Node(Node),
+    };
+
+    // A node can contain 0+ properties and 0+ child nodes.
+    // To make the parsing easier, wrap them both in a `NodeContent` enum
+    // and split them later in the closure.
+    map(
+        many0(alt((
+            map(property, NodeContent::Prop),
+            map(node, NodeContent::Node),
+        ))),
+        |contents| {
+            contents
+                .into_iter()
+                .fold((vec![], vec![]), |(mut props, mut nodes), elem| {
+                    match elem {
+                        NodeContent::Prop(p) => props.push(p),
+                        NodeContent::Node(c) => nodes.push(c),
+                    };
+                    (props, nodes)
+                })
+        },
+    )(input)
+}
 
 /// Parse a node property.
 fn property(input: &[u8]) -> IResult<&[u8], Property> {
-    map_res(
+    map(
         tuple((
             lexeme(prop_name),
             opt(preceded(
@@ -23,46 +71,42 @@ fn property(input: &[u8]) -> IResult<&[u8], Property> {
             )),
             symbol(b";"),
         )),
-        |(name, value, _)| {
-            Ok(Property {
-                name: String::from_utf8_lossy(name).to_string(),
-                value,
-            }) as Result<_, Infallible>
+        |(name, value, _)| Property {
+            name: String::from_utf8_lossy(name).to_string(),
+            value,
         },
     )(input)
 }
 
 /// Parse a property value corresponding to a string.
 fn prop_value_str(input: &[u8]) -> IResult<&[u8], PropertyValue> {
-    map_res(string_literal, |s| {
-        Ok(PropertyValue::Str(String::from_utf8_lossy(s).to_string())) as Result<_, Infallible>
+    map(string_literal, |s| {
+        PropertyValue::Str(String::from_utf8_lossy(s).to_string())
     })(input)
 }
 
 /// Parse a property value corresponding to a cell array.
 fn prop_value_cell_array(input: &[u8]) -> IResult<&[u8], PropertyValue> {
-    map_res(
+    map(
         delimited(
             symbol(b"<"),
             many1(alt((prop_cell_u32, prop_cell_ref))),
             symbol(b">"),
         ),
-        |v| Ok(PropertyValue::CellArray(v)) as Result<_, Infallible>,
+        PropertyValue::CellArray,
     )(input)
 }
 
 /// Parse a property cell containing a reference to another node.
 fn prop_cell_ref(input: &[u8]) -> IResult<&[u8], PropertyCell> {
-    map_res(node_reference, |r| {
-        Ok(PropertyCell::Ref(String::from_utf8_lossy(r).to_string())) as Result<_, Infallible>
+    map(node_reference, |r| {
+        PropertyCell::Ref(String::from_utf8_lossy(r).to_string())
     })(input)
 }
 
 /// Parse a property cell containing a 32-bit integer cell.
 fn prop_cell_u32(input: &[u8]) -> IResult<&[u8], PropertyCell> {
-    map_res(numeric_literal, |n| {
-        Ok(PropertyCell::U32(n)) as Result<_, Infallible>
-    })(input)
+    map(numeric_literal, PropertyCell::U32)(input)
 }
 
 /// Parse a valid property name.
@@ -146,20 +190,23 @@ where
 }
 
 /// Consume zero or more white space characters or line comments.
-fn sc(input: &[u8]) -> IResult<&[u8], ()> {
-    let (input, _) = many0(alt((space1, skip_line_comment)))(input)?;
-    Ok((input, ()))
+fn sc(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    recognize(many0(alt((
+        multispace1,
+        skip_line_comment,
+        skip_block_comment,
+    ))))(input)
 }
 
-/// Skip one or more white space characters.
-fn space1(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    take_while1(|c: u8| c.as_char().is_whitespace())(input)
+/// Return a parser that skips block comments.
+fn skip_block_comment(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    recognize(preceded(symbol(b"/*"), many_till(anychar, symbol(b"*/"))))(input)
 }
 
 /// Return a parser that skips line comments.
 /// Note that it stops just before the newline character but doesn't consume the newline.
 fn skip_line_comment(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    preceded(symbol(b"//"), take_till(|c: u8| c == b'\n'))(input)
+    recognize(preceded(symbol(b"//"), many_till(anychar, line_ending)))(input)
 }
 
 /* === Unit Tests === */
@@ -168,38 +215,19 @@ fn skip_line_comment(input: &[u8]) -> IResult<&[u8], &[u8]> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_whitespaces() {
-        for (input, (rest, matched)) in vec![
-            (" ", ("", " ")),
-            ("   ", ("", "   ")),
-            (" \t", ("", " \t")),
-            ("\n", ("", "\n")),
-            (" \n", ("", " \n")),
-            (" ba", ("ba", " ")),
-            (" \nba", ("ba", " \n")),
-        ]
-        .into_iter()
-        {
-            assert_eq!(
-                space1(input.as_bytes()),
-                Ok((rest.as_bytes(), matched.as_bytes()))
-            );
-        }
-
-        assert!(space1(b"a b").is_err());
-    }
+    use PropertyCell::*;
+    use PropertyValue::*;
 
     #[test]
     fn parse_line_comments() {
         assert_eq!(
-            skip_line_comment(b"// This is a comment"),
-            Ok((&b""[..], &b"This is a comment"[..]))
+            skip_line_comment(b"// This is a comment\n"),
+            Ok((&b""[..], &b"// This is a comment\n"[..]))
         );
 
         assert_eq!(
             skip_line_comment(b"// Multiline comments\nare not supported"),
-            Ok((&b"\nare not supported"[..], &b"Multiline comments"[..]))
+            Ok((&b"are not supported"[..], &b"// Multiline comments\n"[..]))
         );
 
         assert!(skip_line_comment(&br#"prop-name = "value"; // This is a comment"#[..]).is_err());
@@ -262,9 +290,6 @@ mod tests {
 
     #[test]
     fn parse_properties() {
-        use PropertyCell::*;
-        use PropertyValue::*;
-
         for (input, prop) in vec![
             (
                 r#"device_type = "cpu";"#,
@@ -333,5 +358,131 @@ mod tests {
         {
             assert_eq!(property(input.as_bytes()), Ok((&b""[..], prop)));
         }
+    }
+
+    #[test]
+    fn parse_nodes() {
+        assert_eq!(
+            node(
+                br#"cpus {
+                        #address-cells = <1>;
+                        #size-cells = <0>;
+
+                        cpu@0 {
+                            device_type = "cpu";
+                            reg = <0>;
+                            cache-unified;
+                            cache-size = <0x8000>; // L1, 32 KB
+                            cache-block-size = <32>;
+                            timebase-frequency = <82500000>; // 82.5 MHz
+                            next-level-cache = <&L2_0>; // phandle to L2
+
+                            L2_0:l2-cache {
+                                compatible = "cache";
+                            };
+                        };
+
+                        cpu@1 {
+                            device_type = "cpu";
+                            reg = <1>;
+
+                            L2_1:l2-cache {
+                                compatible = "cache";
+                            };
+                        };
+                    };
+            "#
+            ),
+            Ok((
+                &b""[..],
+                Node {
+                    name: String::from("cpus"),
+                    address: None,
+                    label: None,
+                    props: vec![
+                        Property {
+                            name: String::from("#address-cells"),
+                            value: Some(vec![CellArray(vec![U32(1)])])
+                        },
+                        Property {
+                            name: String::from("#size-cells"),
+                            value: Some(vec![CellArray(vec![U32(0)])])
+                        }
+                    ],
+                    children: vec![
+                        Node {
+                            name: String::from("cpu"),
+                            address: Some(0),
+                            label: None,
+                            props: vec![
+                                Property {
+                                    name: String::from("device_type"),
+                                    value: Some(vec![Str(String::from("cpu"))])
+                                },
+                                Property {
+                                    name: String::from("reg"),
+                                    value: Some(vec![CellArray(vec![U32(0)])])
+                                },
+                                Property {
+                                    name: String::from("cache-unified"),
+                                    value: None
+                                },
+                                Property {
+                                    name: String::from("cache-size"),
+                                    value: Some(vec![CellArray(vec![U32(0x8000)])])
+                                },
+                                Property {
+                                    name: String::from("cache-block-size"),
+                                    value: Some(vec![CellArray(vec![U32(32)])])
+                                },
+                                Property {
+                                    name: String::from("timebase-frequency"),
+                                    value: Some(vec![CellArray(vec![U32(82_500_000)])])
+                                },
+                                Property {
+                                    name: String::from("next-level-cache"),
+                                    value: Some(vec![CellArray(vec![Ref(String::from("L2_0"))])])
+                                }
+                            ],
+                            children: vec![Node {
+                                name: String::from("l2-cache"),
+                                address: None,
+                                label: Some(String::from("L2_0")),
+                                props: vec![Property {
+                                    name: String::from("compatible"),
+                                    value: Some(vec![Str(String::from("cache"))])
+                                }],
+                                children: vec![],
+                            }],
+                        },
+                        Node {
+                            name: String::from("cpu"),
+                            address: Some(1),
+                            label: None,
+                            props: vec![
+                                Property {
+                                    name: String::from("device_type"),
+                                    value: Some(vec![Str(String::from("cpu"))])
+                                },
+                                Property {
+                                    name: String::from("reg"),
+                                    value: Some(vec![CellArray(vec![U32(1)])])
+                                }
+                            ],
+                            children: vec![Node {
+                                name: String::from("l2-cache"),
+                                address: None,
+                                label: Some(String::from("L2_1")),
+                                props: vec![Property {
+                                    name: String::from("compatible"),
+                                    value: Some(vec![Str(String::from("cache"))])
+                                }],
+                                children: vec![],
+                            }],
+                        }
+                    ]
+                }
+            ))
+        );
     }
 }

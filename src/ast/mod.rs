@@ -13,9 +13,11 @@ enum Include {
     Global(String),
 }
 
+#[derive(Debug, PartialEq)]
 struct Node {
     name: String,
     label: Option<String>,
+    address: Option<u32>,
     props: Vec<Property>,
     children: Vec<Node>,
 }
