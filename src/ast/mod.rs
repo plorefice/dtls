@@ -2,10 +2,17 @@ mod parser;
 
 pub use parser::*;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Dts {
+    version: DtsVersion,
     includes: Vec<Include>,
     nodes: Vec<Node>,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum DtsVersion {
+    V0,
+    V1
 }
 
 #[derive(Debug, PartialEq)]
@@ -18,7 +25,7 @@ pub enum Include {
 pub struct Node {
     name: String,
     label: Option<String>,
-    address: Option<u32>,
+    address: Option<String>,
     props: Vec<Property>,
     children: Vec<Node>,
 }

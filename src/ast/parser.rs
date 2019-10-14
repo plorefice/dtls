@@ -32,14 +32,17 @@ fn dts_file(input: &[u8]) -> IResult<&[u8], Dts> {
         Node(Node),
     };
 
+    let (input, version) = version_directive(input)?;
+
     map(
         many0(alt((
             map(include, FileContent::Include),
             map(node, FileContent::Node),
         ))),
-        |contents| {
+        move |contents| {
             contents.into_iter().fold(
                 Dts {
+                    version,
                     includes: vec![],
                     nodes: vec![],
                 },
@@ -53,6 +56,16 @@ fn dts_file(input: &[u8]) -> IResult<&[u8], Dts> {
             )
         },
     )(input)
+}
+
+fn version_directive(input: &[u8]) -> IResult<&[u8], DtsVersion> {
+    map(opt(terminated(symbol(b"/dts-v1/"), symbol(b";"))), |v| {
+        if v.is_some() {
+            DtsVersion::V1
+        } else {
+            DtsVersion::V0
+        }
+    })(input)
 }
 
 /// Parse an include directive.
@@ -77,8 +90,8 @@ fn node(input: &[u8]) -> IResult<&[u8], Node> {
         )),
         |(label, (name, address), (props, children), _)| Node {
             name: String::from_utf8_lossy(name).to_string(),
+            address: address.and_then(|address| Some(String::from_utf8_lossy(address).to_string())),
             label: label.and_then(|label| Some(String::from_utf8_lossy(label).to_string())),
-            address,
             props,
             children,
         },
@@ -178,11 +191,8 @@ fn node_label(input: &[u8]) -> IResult<&[u8], &[u8]> {
 
 /// Parse a valid node name.
 /// A node name has composed of a node-name part and an optional node-address in hex format.
-fn node_name(input: &[u8]) -> IResult<&[u8], (&[u8], Option<u32>)> {
-    lexeme(pair(
-        node_name_identifier,
-        opt(preceded(symbol(b"@"), unprefixed_hex)),
-    ))(input)
+fn node_name(input: &[u8]) -> IResult<&[u8], (&[u8], Option<&[u8]>)> {
+    lexeme(pair(node_name_identifier, opt(node_address_identifier)))(input)
 }
 
 /// Parse a valid node name identifier,
@@ -192,6 +202,14 @@ fn node_name_identifier(input: &[u8]) -> IResult<&[u8], &[u8]> {
         symbol(b"/"),
         recognize(tuple((alpha1, many0(alt((alphanumeric1, is_a(",._+-"))))))),
     ))(input)
+}
+
+/// Parse a valid node unit-address identifier.
+fn node_address_identifier(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    preceded(
+        symbol(b"@"),
+        recognize(many1(alt((alphanumeric1, is_a(",._+-"))))),
+    )(input)
 }
 
 /// Parse a valid number in any base.
@@ -216,13 +234,6 @@ fn string_literal(input: &[u8]) -> IResult<&[u8], String> {
 }
 
 /* === Utility functions === */
-
-/// Parse a natural number in base 16, without `0x` prefix.
-fn unprefixed_hex(input: &[u8]) -> IResult<&[u8], u32> {
-    map_res(hex_digit1, |input| {
-        u32::from_str_radix(std::str::from_utf8(input).unwrap(), 16)
-    })(input)
-}
 
 /// Parse a natural number in base 16, prefixed by `0x`.
 fn hex(input: &[u8]) -> IResult<&[u8], u32> {
@@ -301,22 +312,25 @@ mod tests {
         for (input, (name, address)) in vec![
             ("/", ("/", None)),
             ("cpus", ("cpus", None)),
-            ("cpu@0", ("cpu", Some(0x0))),
-            ("cpu@1", ("cpu", Some(0x1))),
+            ("cpu@0", ("cpu", Some("0"))),
+            ("cpu@1", ("cpu", Some("1"))),
             ("l2-cache", ("l2-cache", None)),
             ("l3-cache", ("l3-cache", None)),
             ("open-pic", ("open-pic", None)),
             ("soc_gpio1", ("soc_gpio1", None)),
-            ("memory@0", ("memory", Some(0x0))),
-            ("uart@fe001000", ("uart", Some(0xfe00_1000))),
-            ("ethernet@fe002000", ("ethernet", Some(0xfe00_2000))),
-            ("ethernet@fe003000", ("ethernet", Some(0xfe00_3000))),
+            ("memory@0", ("memory", Some("0"))),
+            ("uart@fe001000", ("uart", Some("fe001000"))),
+            ("ethernet@fe002000", ("ethernet", Some("fe002000"))),
+            ("ethernet@fe003000", ("ethernet", Some("fe003000"))),
         ]
         .into_iter()
         {
             assert_eq!(
                 node_name(input.as_bytes()),
-                Ok((&b""[..], (name.as_bytes(), address)))
+                Ok((
+                    &b""[..],
+                    (name.as_bytes(), address.and_then(|a| Some(a.as_bytes())))
+                ))
             );
         }
     }
@@ -475,7 +489,7 @@ mod tests {
                     children: vec![
                         Node {
                             name: String::from("cpu"),
-                            address: Some(0),
+                            address: Some(String::from("0")),
                             label: None,
                             props: vec![
                                 Property {
@@ -520,7 +534,7 @@ mod tests {
                         },
                         Node {
                             name: String::from("cpu"),
-                            address: Some(1),
+                            address: Some(String::from("1")),
                             label: None,
                             props: vec![
                                 Property {
@@ -559,5 +573,99 @@ mod tests {
             include(br#"#include "sama5.dtsi""#),
             Ok((&b""[..], Include::Local(String::from("sama5.dtsi"))))
         );
+    }
+
+    #[test]
+    fn parse_simple_file() {
+        let dts = br#"/dts-v1/;
+
+/ {
+    compatible = "acme,coyotes-revenge";
+    #address-cells = <1>;
+    #size-cells = <1>;
+    interrupt-parent = <&intc>;
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        cpu@0 {
+            compatible = "arm,cortex-a9";
+            reg = <0>;
+        };
+        cpu@1 {
+            compatible = "arm,cortex-a9";
+            reg = <1>;
+        };
+    };
+
+    serial@101f0000 {
+        compatible = "arm,pl011";
+        reg = <0x101f0000 0x1000 >;
+        interrupts = < 1 0 >;
+    };
+
+    serial@101f2000 {
+        compatible = "arm,pl011";
+        reg = <0x101f2000 0x1000 >;
+        interrupts = < 2 0 >;
+    };
+
+    gpio@101f3000 {
+        compatible = "arm,pl061";
+        reg = <0x101f3000 0x1000
+               0x101f4000 0x0010>;
+        interrupts = < 3 0 >;
+    };
+
+    intc: interrupt-controller@10140000 {
+        compatible = "arm,pl190";
+        reg = <0x10140000 0x1000 >;
+        interrupt-controller;
+        #interrupt-cells = <2>;
+    };
+
+    spi@10115000 {
+        compatible = "arm,pl022";
+        reg = <0x10115000 0x1000 >;
+        interrupts = < 4 0 >;
+    };
+
+    external-bus {
+        #address-cells = <2>;
+        #size-cells = <1>;
+        ranges = <0 0  0x10100000   0x10000     // Chipselect 1, Ethernet
+                  1 0  0x10160000   0x10000     // Chipselect 2, i2c controller
+                  2 0  0x30000000   0x1000000>; // Chipselect 3, NOR Flash
+
+        ethernet@0,0 {
+            compatible = "smc,smc91c111";
+            reg = <0 0 0x1000>;
+            interrupts = < 5 2 >;
+        };
+
+        i2c@1,0 {
+            compatible = "acme,a1234-i2c-bus";
+            #address-cells = <1>;
+            #size-cells = <0>;
+            reg = <1 0 0x1000>;
+            interrupts = < 6 2 >;
+            rtc@58 {
+                compatible = "maxim,ds1338";
+                reg = <58>;
+                interrupts = < 7 3 >;
+            };
+        };
+
+        flash@2,0 {
+            compatible = "samsung,k8f1315ebm", "cfi-flash";
+            reg = <2 0 0x4000000>;
+        };
+    };
+};"#;
+
+        let (rest, _) = dts_file(dts).unwrap();
+
+        // Someday I'll write a proper test for the above file...
+        assert!(rest.is_empty());
     }
 }
