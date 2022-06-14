@@ -9,7 +9,7 @@ use nom::{
     },
     combinator::{cut, map, opt, recognize},
     error::{convert_error, ParseError, VerboseError},
-    multi::{many0, many1, many_m_n, many_till, separated_list0, separated_list1},
+    multi::{many0, many1, many_m_n, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
     Finish, IResult,
 };
@@ -189,11 +189,27 @@ where
     separated_list1(
         list_separator,
         alt((
+            prop_value_bits,
             prop_value_cell_array,
             prop_value_bytestring,
             prop_value_alias,
             prop_value_str,
         )),
+    )(input)
+}
+
+/// Parse a property value corresponding to the `/bits/` keyword followed by its arguments.
+fn prop_value_bits<'a, E>(input: &'a str) -> IResult<&'a str, PropertyValue, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(
+        tuple((
+            bits_keyword,
+            cut(dec),
+            cut(delimited(cell_array_start, prop_cell_expr, cell_array_end)),
+        )),
+        |(_, n, bits)| PropertyValue::Bits(n, bits),
     )(input)
 }
 
@@ -238,7 +254,7 @@ where
     map(
         preceded(
             bracket_start,
-            cut(terminated(separated_list0(opt(ws), hex_byte), bracket_end)),
+            cut(terminated(many1(lexeme(hex_byte)), bracket_end)),
         ),
         PropertyValue::Bytestring,
     )(input)
@@ -257,7 +273,10 @@ fn prop_cell_expr<'a, E>(input: &'a str) -> IResult<&'a str, PropertyCell, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(map(integer_expr, PropertyCell::Expr))(input)
+    lexeme(map(
+        alt((integer_expr_parens, integer_expr_lit)),
+        PropertyCell::Expr,
+    ))(input)
 }
 
 /// Parse a valid node reference.
@@ -295,13 +314,18 @@ where
     preceded(char('@'), cut(node_name_str))(input)
 }
 
+/// Parse a valid top-level integer expression in a property cell.
+///
+/// Valid expressions include a single integer literal (e.g. `<0>`) or a parenthesized expression
+/// (e.g. `<(1 << 1)>`).
 fn integer_expr<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
 where
     E: ParseError<&'a str>,
 {
-    alt((integer_expr_paren, integer_expr_lit))(input)
+    alt((integer_expr_lit, integer_expr_parens))(input)
 }
 
+/// Parse a valid integer literal expression in a property cell.
 fn integer_expr_lit<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
 where
     E: ParseError<&'a str>,
@@ -309,26 +333,56 @@ where
     map(numeric_literal, IntegerExpression::Lit)(input)
 }
 
-fn integer_expr_paren<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
+/// Parse a valid parenthesized integer expression in a property cell.
+///
+/// Parenthesized expressions may contain a single term or an inner parenthesized expression.
+fn integer_expr_parens<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
 where
     E: ParseError<&'a str>,
 {
     preceded(
         paren_start,
         cut(terminated(
-            alt((integer_expr_binary, integer_expr_lit)),
+            alt((integer_expr_term, integer_expr_parens)),
             paren_end,
         )),
     )(input)
 }
 
+/// Parse a valid integer expression term in a property cell.
+///
+/// A term may be a single integer literal, a binary operator applied to two terms
+/// or a unary operator applied to a single term.
+fn integer_expr_term<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
+where
+    E: ParseError<&'a str>,
+{
+    alt((integer_expr_binary, integer_expr_unary, integer_expr_lit))(input)
+}
+
+/// Parse a valid binary integer expression term in a property cell.
 fn integer_expr_binary<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
 where
     E: ParseError<&'a str>,
 {
     map(
-        tuple((integer_expr, arith_operator_binary, cut(integer_expr))),
+        tuple((
+            integer_expr,
+            arith_operator_binary,
+            cut(alt((integer_expr_term, integer_expr_parens))),
+        )),
         |(left, op, right)| IntegerExpression::Binary(Box::new(left), op, Box::new(right)),
+    )(input)
+}
+
+/// Parse a valid unary integer expression term in a property cell.
+fn integer_expr_unary<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(
+        tuple((arith_operator_unary, cut(integer_expr))),
+        |(op, right)| IntegerExpression::Unary(op, Box::new(right)),
     )(input)
 }
 
@@ -471,6 +525,14 @@ where
     lexeme(char(']'))(input)
 }
 
+/// Recognize an arithmetic unary operator.
+fn arith_operator_unary<'a, E>(input: &'a str) -> IResult<&'a str, UnaryOperator, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(map(tag("~"), |_| UnaryOperator::BitNot))(input)
+}
+
 /// Recognize an arithmetic binary operator.
 fn arith_operator_binary<'a, E>(input: &'a str) -> IResult<&'a str, BinaryOperator, E>
 where
@@ -575,6 +637,14 @@ where
     E: ParseError<&'a str>,
 {
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+?#-")))))(input)
+}
+
+/// Recognize the `/bits/` keyword.
+fn bits_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(tag("/bits/"))(input)
 }
 
 /* === Utility functions === */

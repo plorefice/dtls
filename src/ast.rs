@@ -42,6 +42,7 @@ pub enum PropertyValue {
     Alias(String),
     Bytestring(Vec<u8>),
     CellArray(Vec<PropertyCell>),
+    Bits(u32, PropertyCell),
 }
 
 #[derive(Debug, PartialEq)]
@@ -53,11 +54,17 @@ pub enum PropertyCell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegerExpression {
     Lit(u32),
+    Unary(UnaryOperator, Box<IntegerExpression>),
     Binary(
         Box<IntegerExpression>,
         BinaryOperator,
         Box<IntegerExpression>,
     ),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOperator {
+    BitNot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
