@@ -5,10 +5,11 @@ use nom::{
     branch::alt,
     bytes::complete::{is_a, is_not, tag},
     character::complete::{
-        alpha1, alphanumeric1, anychar, digit1, hex_digit1, line_ending, multispace1,
+        alphanumeric1, anychar, char, hex_digit1, line_ending, multispace1, space1, u32,
     },
-    combinator::{map, map_res, opt, recognize},
-    multi::{many0, many1, many_till, separated_list1},
+    combinator::{cut, map, opt, recognize},
+    error::ParseError,
+    multi::{many0, many1, many_m_n, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
@@ -20,7 +21,7 @@ pub fn from_reader(mut r: impl Read) -> Result<Dts> {
     let mut dts = String::new();
     r.read_to_string(&mut dts)?;
 
-    let dts = match dts_file(&dts) {
+    let dts = match dts_file::<nom::error::Error<&str>>(&dts) {
         Ok((_, dts)) => dts,
         Err(e) => bail!("{:?}", e.to_string()),
     };
@@ -29,14 +30,15 @@ pub fn from_reader(mut r: impl Read) -> Result<Dts> {
 }
 
 /// Parse a Device Tree source file.
-fn dts_file(input: &str) -> IResult<&str, Dts> {
+fn dts_file<'a, E>(input: &'a str) -> IResult<&'a str, Dts, E>
+where
+    E: ParseError<&'a str>,
+{
     enum FileContent {
         Include(Include),
         Node(Node),
     }
 
-    // Trim leading commends/spaces
-    let (input, _) = sc(input)?;
     let (input, version) = version_directive(input)?;
 
     map(
@@ -63,36 +65,46 @@ fn dts_file(input: &str) -> IResult<&str, Dts> {
     )(input)
 }
 
-fn version_directive(input: &str) -> IResult<&str, DtsVersion> {
-    map(opt(terminated(symbol("/dts-v1/"), symbol(";"))), |v| {
-        if v.is_some() {
-            DtsVersion::V1
-        } else {
-            DtsVersion::V0
-        }
-    })(input)
+fn version_directive<'a, E>(input: &'a str) -> IResult<&'a str, DtsVersion, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(
+        opt(terminated(lexeme(tag("/dts-v1/")), cut(terminator))),
+        |v| {
+            if v.is_some() {
+                DtsVersion::V1
+            } else {
+                DtsVersion::V0
+            }
+        },
+    )(input)
 }
 
 /// Parse an include directive.
-fn include(input: &str) -> IResult<&str, Include> {
+fn include<'a, E>(input: &'a str) -> IResult<&'a str, Include, E>
+where
+    E: ParseError<&'a str>,
+{
     preceded(
-        symbol("#include"),
-        alt((
-            map(include_path, |s| Include::Global(s.to_string())),
-            map(string_literal, |s| Include::Local(s.to_string())),
-        )),
+        include_prefix,
+        cut(alt((
+            map(global_include_path, |s| Include::Global(s.to_string())),
+            map(local_include_path, |s| Include::Local(s.to_string())),
+        ))),
     )(input)
 }
 
 /// Parse a device tree node.
-fn node(input: &str) -> IResult<&str, Node> {
+fn node<'a, E>(input: &'a str) -> IResult<&'a str, Node, E>
+where
+    E: ParseError<&'a str>,
+{
+    let label = terminated(node_label, label_separator);
+    let contents = preceded(block_start, cut(terminated(node_contents, block_end)));
+
     map(
-        tuple((
-            opt(terminated(node_label, symbol(":"))),
-            node_name,
-            delimited(symbol("{"), node_contents, symbol("}")),
-            symbol(";"),
-        )),
+        tuple((opt(label), node_name, contents, cut(terminator))),
         |(label, (name, address), (props, children), _)| Node {
             name: name.to_string(),
             address: address.map(|address| address.to_string()),
@@ -103,8 +115,19 @@ fn node(input: &str) -> IResult<&str, Node> {
     )(input)
 }
 
+/// Parse a node label.
+fn node_label<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(node_label_str)(input)
+}
+
 /// Parse the contents of a node.
-fn node_contents(input: &str) -> IResult<&str, (Vec<Property>, Vec<Node>)> {
+fn node_contents<'a, E>(input: &'a str) -> IResult<&'a str, (Vec<Property>, Vec<Node>), E>
+where
+    E: ParseError<&'a str>,
+{
     enum NodeContent {
         Prop(Property),
         Node(Node),
@@ -115,8 +138,8 @@ fn node_contents(input: &str) -> IResult<&str, (Vec<Property>, Vec<Node>)> {
     // and split them later in the closure.
     map(
         many0(alt((
-            map(property, NodeContent::Prop),
             map(node, NodeContent::Node),
+            map(property, NodeContent::Prop),
         ))),
         |contents| {
             contents
@@ -133,18 +156,15 @@ fn node_contents(input: &str) -> IResult<&str, (Vec<Property>, Vec<Node>)> {
 }
 
 /// Parse a node property.
-fn property(input: &str) -> IResult<&str, Property> {
+fn property<'a, E>(input: &'a str) -> IResult<&'a str, Property, E>
+where
+    E: ParseError<&'a str>,
+{
     map(
         tuple((
-            lexeme(prop_name),
-            opt(preceded(
-                symbol("="),
-                separated_list1(
-                    symbol(","),
-                    alt((prop_value_cell_array, prop_value_alias, prop_value_str)),
-                ),
-            )),
-            symbol(";"),
+            prop_name,
+            opt(preceded(assignment, cut(prop_values))),
+            cut(terminator),
         )),
         |(name, value, _)| Property {
             name: name.to_string(),
@@ -153,138 +173,330 @@ fn property(input: &str) -> IResult<&str, Property> {
     )(input)
 }
 
+/// Parse a propery name.
+fn prop_name<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(prop_name_str)(input)
+}
+
+/// Parse a property value list.
+fn prop_values<'a, E>(input: &'a str) -> IResult<&'a str, Vec<PropertyValue>, E>
+where
+    E: ParseError<&'a str>,
+{
+    separated_list1(
+        list_separator,
+        alt((prop_value_cell_array, prop_value_alias, prop_value_str)),
+    )(input)
+}
+
 /// Parse a property value corresponding to a reference to another node.
-fn prop_value_alias(input: &str) -> IResult<&str, PropertyValue> {
-    map(node_reference, |s| PropertyValue::Alias(s.to_string()))(input)
+fn prop_value_alias<'a, E>(input: &'a str) -> IResult<&'a str, PropertyValue, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(map(node_reference, |s| PropertyValue::Alias(s.to_string())))(input)
 }
 
 /// Parse a property value corresponding to a string.
-fn prop_value_str(input: &str) -> IResult<&str, PropertyValue> {
-    map(string_literal, |s| PropertyValue::Str(s.to_string()))(input)
+fn prop_value_str<'a, E>(input: &'a str) -> IResult<&'a str, PropertyValue, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(map(string_literal, |s| PropertyValue::Str(s.to_string())))(input)
 }
 
 /// Parse a property value corresponding to a cell array.
-fn prop_value_cell_array(input: &str) -> IResult<&str, PropertyValue> {
+fn prop_value_cell_array<'a, E>(input: &'a str) -> IResult<&'a str, PropertyValue, E>
+where
+    E: ParseError<&'a str>,
+{
     map(
-        delimited(
-            symbol("<"),
-            many1(alt((prop_cell_u32, prop_cell_ref))),
-            symbol(">"),
+        preceded(
+            cell_array_start,
+            cut(terminated(
+                many1(alt((prop_cell_u32, prop_cell_ref))),
+                cell_array_end,
+            )),
         ),
         PropertyValue::CellArray,
     )(input)
 }
 
 /// Parse a property cell containing a reference to another node.
-fn prop_cell_ref(input: &str) -> IResult<&str, PropertyCell> {
-    map(node_reference, |s| PropertyCell::Ref(s.to_string()))(input)
+fn prop_cell_ref<'a, E>(input: &'a str) -> IResult<&'a str, PropertyCell, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(map(node_reference, |s| PropertyCell::Ref(s.to_string())))(input)
 }
 
 /// Parse a property cell containing a 32-bit integer cell.
-fn prop_cell_u32(input: &str) -> IResult<&str, PropertyCell> {
-    map(numeric_literal, PropertyCell::U32)(input)
-}
-
-/// Parse a valid property name.
-fn prop_name(input: &str) -> IResult<&str, &str> {
-    recognize(many1(alt((alphanumeric1, is_a(",._+?#-")))))(input)
+fn prop_cell_u32<'a, E>(input: &'a str) -> IResult<&'a str, PropertyCell, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(map(numeric_literal, PropertyCell::U32))(input)
 }
 
 /// Parse a valid node reference.
-fn node_reference(input: &str) -> IResult<&str, &str> {
-    lexeme(preceded(symbol("&"), node_label))(input)
-}
-
-/// Parse a valid node label.
-fn node_label(input: &str) -> IResult<&str, &str> {
-    lexeme(recognize(many1(alt((alphanumeric1, symbol("_"))))))(input)
+fn node_reference<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(preceded(char('&'), cut(node_label_str)))(input)
 }
 
 /// Parse a valid node name.
+///
 /// A node name has composed of a node-name part and an optional node-address in hex format.
 #[allow(clippy::type_complexity)]
-fn node_name(input: &str) -> IResult<&str, (&str, Option<&str>)> {
+fn node_name<'a, E>(input: &'a str) -> IResult<&'a str, (&'a str, Option<&'a str>), E>
+where
+    E: ParseError<&'a str>,
+{
     lexeme(pair(node_name_identifier, opt(node_address_identifier)))(input)
 }
 
-/// Parse a valid node name identifier,
-/// ie. the part of the node name before the unit-address.
-fn node_name_identifier(input: &str) -> IResult<&str, &str> {
-    alt((
-        symbol("/"),
-        recognize(tuple((alpha1, many0(alt((alphanumeric1, is_a(",._+-"))))))),
-    ))(input)
+/// Parse a valid node name identifier, i.e. the part of the node name before the unit-address.
+fn node_name_identifier<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    alt((tag("/"), node_name_str))(input)
 }
 
 /// Parse a valid node unit-address identifier.
-fn node_address_identifier(input: &str) -> IResult<&str, &str> {
-    preceded(
-        symbol("@"),
-        recognize(many1(alt((alphanumeric1, is_a(",._+-"))))),
-    )(input)
+fn node_address_identifier<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    preceded(char('@'), cut(node_name_str))(input)
 }
 
 /// Parse a valid number in any base.
-fn numeric_literal(input: &str) -> IResult<&str, u32> {
+fn numeric_literal<'a, E>(input: &'a str) -> IResult<&'a str, u32, E>
+where
+    E: ParseError<&'a str>,
+{
     lexeme(alt((hex, dec)))(input)
 }
 
 /// Parse a valid global include path.
-fn include_path(input: &str) -> IResult<&str, &str> {
-    lexeme(delimited(symbol("<"), is_not(">"), symbol(">")))(input)
+fn global_include_path<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    preceded(
+        cell_array_start,
+        cut(terminated(include_path_bracketed_str, cell_array_end)),
+    )(input)
+}
+
+/// Parse a valid local include path.
+fn local_include_path<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    preceded(
+        char('"'),
+        cut(terminated(include_path_quoted_str, char('"'))),
+    )(input)
 }
 
 /// Parse a valid string literal.
-fn string_literal(input: &str) -> IResult<&str, &str> {
-    lexeme(delimited(symbol("\""), is_not("\""), symbol("\"")))(input)
+fn string_literal<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(preceded(
+        char('"'),
+        cut(terminated(printable_ascii, char('"'))),
+    ))(input)
 }
 
-/* === Utility functions === */
+/* === Low-level syntax parsers === */
+
+/// Recognize an assigment operator.
+fn assignment<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('='))(input)
+}
+
+/// Recognize a statement terminator.
+fn terminator<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char(';'))(input)
+}
+
+/// Recognize a list separator.
+fn list_separator<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char(','))(input)
+}
+
+/// Recognize a label separator.
+fn label_separator<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char(':'))(input)
+}
+
+/// Recognize the start of a block.
+fn block_start<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('{'))(input)
+}
+
+/// Recognize the end of a block.
+fn block_end<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('}'))(input)
+}
+
+/// Recognize the start of a cell array.
+fn cell_array_start<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('<'))(input)
+}
+
+/// Recognize the end of a cell array.
+fn cell_array_end<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('>'))(input)
+}
 
 /// Parse a natural number in base 16, prefixed by `0x`.
-fn hex(input: &str) -> IResult<&str, u32> {
-    map_res(preceded(symbol("0x"), hex_digit1), |input: &str| {
-        u32::from_str_radix(input, 16)
+fn hex<'a, E>(input: &'a str) -> IResult<&'a str, u32, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(preceded(tag("0x"), cut(hex_digit1)), |s: &str| {
+        u32::from_str_radix(s, 16).unwrap()
     })(input)
 }
 
 /// Parse a natural number in base 10.
-fn dec(input: &str) -> IResult<&str, u32> {
-    map_res(digit1, |input: &str| input.parse::<u32>())(input)
-}
-
-/// Consume a fixed symbol.
-fn symbol<'a>(s: &'a str) -> impl FnMut(&'a str) -> IResult<&str, &str> {
-    lexeme(tag(s))
-}
-
-/// Parse a lexeme using the combinator passed as its argument,
-/// also consuming zero or more trailing whitespaces.
-fn lexeme<'a, O, F>(f: F) -> impl FnMut(&'a str) -> IResult<&str, O>
+fn dec<'a, E>(input: &'a str) -> IResult<&'a str, u32, E>
 where
-    F: FnMut(&'a str) -> IResult<&str, O>,
+    E: ParseError<&'a str>,
 {
-    terminated(f, sc)
+    u32(input)
 }
 
-/// Consume zero or more white space characters or line comments.
-fn sc(input: &str) -> IResult<&str, &str> {
-    recognize(many0(alt((
-        multispace1,
-        skip_line_comment,
-        skip_block_comment,
+/// Recognize a sequence of printable ASCII characters.
+fn printable_ascii<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(many1(alt((
+        alphanumeric1,
+        space1,
+        is_a("!#$%&'()*+,-./:;<=>?@[]^_`{|}~"),
     ))))(input)
 }
 
-/// Return a parser that skips block comments.
-fn skip_block_comment(input: &str) -> IResult<&str, &str> {
-    recognize(preceded(symbol("/*"), many_till(anychar, symbol("*/"))))(input)
+/// Recognize an include directive prefix.
+fn include_prefix<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(tag("#include"))(input)
 }
 
-/// Return a parser that skips line comments.
-/// Note that it stops just before the newline character but doesn't consume the newline.
-fn skip_line_comment(input: &str) -> IResult<&str, &str> {
-    recognize(preceded(symbol("//"), many_till(anychar, line_ending)))(input)
+/// Recognize a valid path in an #include <...> directive.
+fn include_path_bracketed_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(separated_list1(char('/'), is_not("/\0<>")))(input)
+}
+
+/// Recognize a valid path in an #include "..." directive.
+fn include_path_quoted_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(separated_list1(char('/'), is_not("/\0\"")))(input)
+}
+
+/// Recognize a valid node name string.
+fn node_name_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+-")))))(input)
+}
+
+/// Recognize a valid node label string.
+fn node_label_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(many_m_n(1, 31, alt((alphanumeric1, is_a("_")))))(input)
+}
+
+/// Recognize a valid property name string.
+fn prop_name_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+?#-")))))(input)
+}
+
+/* === Utility functions === */
+
+/// Parse a lexeme using the combinator passed as its argument,
+/// also consuming any whitespaces or comments before or after.
+fn lexeme<'a, O, F, E>(f: F) -> impl FnMut(&'a str) -> IResult<&str, O, E>
+where
+    E: ParseError<&'a str>,
+    F: FnMut(&'a str) -> IResult<&str, O, E>,
+{
+    delimited(ws, f, ws)
+}
+
+/// Consume zero or more whitespace characters or comments.
+fn ws<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(many0(alt((multispace1, line_comment, block_comment))))(input)
+}
+
+/// Parse block comments.
+fn block_comment<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(preceded(tag("/*"), many_till(anychar, tag("*/"))))(input)
+}
+
+/// Parse a single line comment.
+///
+/// The parser stops just before the newline character but doesn't consume the newline.
+fn line_comment<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(preceded(tag("//"), many_till(anychar, line_ending)))(input)
 }
 
 /* === Unit Tests === */
@@ -293,27 +505,34 @@ fn skip_line_comment(input: &str) -> IResult<&str, &str> {
 mod tests {
     use super::*;
 
+    use nom::{
+        error::{convert_error, VerboseError},
+        Finish,
+    };
     use PropertyCell::*;
     use PropertyValue::*;
 
     #[test]
     fn parse_line_comments() {
         assert_eq!(
-            skip_line_comment("// This is a comment\n"),
+            line_comment::<VerboseError<&str>>("// This is a comment\n"),
             Ok(("", "// This is a comment\n"))
         );
 
         assert_eq!(
-            skip_line_comment("// Multiline comments\nare not supported"),
+            line_comment::<VerboseError<&str>>("// Multiline comments\nare not supported"),
             Ok(("are not supported", "// Multiline comments\n"))
         );
 
-        assert!(skip_line_comment(r#"prop-name = "value"; // This is a comment"#).is_err());
+        assert!(
+            line_comment::<VerboseError<&str>>(r#"prop-name = "value"; // This is a comment"#)
+                .is_err()
+        );
     }
 
     #[test]
     fn parse_node_names() {
-        for (input, (name, address)) in vec![
+        for (input, (name, address)) in [
             ("/", ("/", None)),
             ("cpus", ("cpus", None)),
             ("cpu@0", ("cpu", Some("0"))),
@@ -326,23 +545,27 @@ mod tests {
             ("uart@fe001000", ("uart", Some("fe001000"))),
             ("ethernet@fe002000", ("ethernet", Some("fe002000"))),
             ("ethernet@fe003000", ("ethernet", Some("fe003000"))),
-        ]
-        .into_iter()
-        {
-            assert_eq!(node_name(input), Ok(("", (name, address))));
+        ] {
+            match node_name::<VerboseError<&str>>(input).finish() {
+                Ok(res) => assert_eq!(res, ("", (name, address))),
+                Err(e) => panic!("{}", convert_error(input, e),),
+            }
         }
     }
 
     #[test]
     fn parse_node_labels() {
-        for label in vec!["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"].into_iter() {
-            assert_eq!(node_label(label), Ok(("", label)));
+        for label in ["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"] {
+            match node_label::<VerboseError<&str>>(label).finish() {
+                Ok(res) => assert_eq!(res, ("", label)),
+                Err(e) => panic!("{}", convert_error(label, e),),
+            }
         }
     }
 
     #[test]
     fn parse_prop_names() {
-        for name in vec![
+        for name in [
             "reg",
             "status",
             "compatible",
@@ -353,16 +576,17 @@ mod tests {
             "fsl,channel-fifo-len",
             "ibm,ppc-interrupt-server#s",
             "linux,network-index",
-        ]
-        .into_iter()
-        {
-            assert_eq!(prop_name(name), Ok(("", name)));
+        ] {
+            match prop_name::<VerboseError<&str>>(name).finish() {
+                Ok(res) => assert_eq!(res, ("", name)),
+                Err(e) => panic!("{}", convert_error(name, e),),
+            }
         }
     }
 
     #[test]
     fn parse_properties() {
-        for (input, prop) in vec![
+        for (input, prop) in [
             (
                 r#"device_type = "cpu";"#,
                 Property {
@@ -432,154 +656,162 @@ mod tests {
                     value: Some(vec![Alias(String::from("usart3"))]),
                 },
             ),
-        ]
-        .into_iter()
-        {
-            assert_eq!(property(input), Ok(("", prop)));
+        ] {
+            match property::<VerboseError<&str>>(input).finish() {
+                Ok(res) => assert_eq!(res, ("", (prop))),
+                Err(e) => panic!("{}", convert_error(input, e),),
+            }
         }
     }
 
     #[test]
     fn parse_nodes() {
-        assert_eq!(
-            node(
-                r#"cpus {
-                        #address-cells = <1>;
-                        #size-cells = <0>;
+        let input = r#"cpus {
+            #address-cells = <1>;
+            #size-cells = <0>;
 
-                        cpu@0 {
-                            device_type = "cpu";
-                            reg = <0>;
-                            cache-unified;
-                            cache-size = <0x8000>; // L1, 32 KB
-                            cache-block-size = <32>;
-                            timebase-frequency = <82500000>; // 82.5 MHz
-                            next-level-cache = <&L2_0>; // phandle to L2
+            cpu@0 {
+                device_type = "cpu";
+                reg = <0>;
+                cache-unified;
+                cache-size = <0x8000>; // L1, 32 KB
+                cache-block-size = <32>;
+                timebase-frequency = <82500000>; // 82.5 MHz
+                next-level-cache = <&L2_0>; // phandle to L2
 
-                            L2_0:l2-cache {
-                                compatible = "cache";
-                            };
-                        };
+                L2_0:l2-cache {
+                    compatible = "cache";
+                };
+            };
 
-                        cpu@1 {
-                            device_type = "cpu";
-                            reg = <1>;
+            cpu@1 {
+                device_type = "cpu";
+                reg = <1>;
 
-                            L2_1:l2-cache {
-                                compatible = "cache";
-                            };
-                        };
-                    };
-            "#
-            ),
-            Ok((
-                "",
+                L2_1:l2-cache {
+                    compatible = "cache";
+                };
+            };
+        };
+"#;
+
+        let exp = Node {
+            name: String::from("cpus"),
+            address: None,
+            label: None,
+            props: vec![
+                Property {
+                    name: String::from("#address-cells"),
+                    value: Some(vec![CellArray(vec![U32(1)])]),
+                },
+                Property {
+                    name: String::from("#size-cells"),
+                    value: Some(vec![CellArray(vec![U32(0)])]),
+                },
+            ],
+            children: vec![
                 Node {
-                    name: String::from("cpus"),
-                    address: None,
+                    name: String::from("cpu"),
+                    address: Some(String::from("0")),
                     label: None,
                     props: vec![
                         Property {
-                            name: String::from("#address-cells"),
-                            value: Some(vec![CellArray(vec![U32(1)])])
+                            name: String::from("device_type"),
+                            value: Some(vec![Str(String::from("cpu"))]),
                         },
                         Property {
-                            name: String::from("#size-cells"),
-                            value: Some(vec![CellArray(vec![U32(0)])])
-                        }
-                    ],
-                    children: vec![
-                        Node {
-                            name: String::from("cpu"),
-                            address: Some(String::from("0")),
-                            label: None,
-                            props: vec![
-                                Property {
-                                    name: String::from("device_type"),
-                                    value: Some(vec![Str(String::from("cpu"))])
-                                },
-                                Property {
-                                    name: String::from("reg"),
-                                    value: Some(vec![CellArray(vec![U32(0)])])
-                                },
-                                Property {
-                                    name: String::from("cache-unified"),
-                                    value: None
-                                },
-                                Property {
-                                    name: String::from("cache-size"),
-                                    value: Some(vec![CellArray(vec![U32(0x8000)])])
-                                },
-                                Property {
-                                    name: String::from("cache-block-size"),
-                                    value: Some(vec![CellArray(vec![U32(32)])])
-                                },
-                                Property {
-                                    name: String::from("timebase-frequency"),
-                                    value: Some(vec![CellArray(vec![U32(82_500_000)])])
-                                },
-                                Property {
-                                    name: String::from("next-level-cache"),
-                                    value: Some(vec![CellArray(vec![Ref(String::from("L2_0"))])])
-                                }
-                            ],
-                            children: vec![Node {
-                                name: String::from("l2-cache"),
-                                address: None,
-                                label: Some(String::from("L2_0")),
-                                props: vec![Property {
-                                    name: String::from("compatible"),
-                                    value: Some(vec![Str(String::from("cache"))])
-                                }],
-                                children: vec![],
-                            }],
+                            name: String::from("reg"),
+                            value: Some(vec![CellArray(vec![U32(0)])]),
                         },
-                        Node {
-                            name: String::from("cpu"),
-                            address: Some(String::from("1")),
-                            label: None,
-                            props: vec![
-                                Property {
-                                    name: String::from("device_type"),
-                                    value: Some(vec![Str(String::from("cpu"))])
-                                },
-                                Property {
-                                    name: String::from("reg"),
-                                    value: Some(vec![CellArray(vec![U32(1)])])
-                                }
-                            ],
-                            children: vec![Node {
-                                name: String::from("l2-cache"),
-                                address: None,
-                                label: Some(String::from("L2_1")),
-                                props: vec![Property {
-                                    name: String::from("compatible"),
-                                    value: Some(vec![Str(String::from("cache"))])
-                                }],
-                                children: vec![],
-                            }],
-                        }
-                    ]
-                }
-            ))
-        );
+                        Property {
+                            name: String::from("cache-unified"),
+                            value: None,
+                        },
+                        Property {
+                            name: String::from("cache-size"),
+                            value: Some(vec![CellArray(vec![U32(0x8000)])]),
+                        },
+                        Property {
+                            name: String::from("cache-block-size"),
+                            value: Some(vec![CellArray(vec![U32(32)])]),
+                        },
+                        Property {
+                            name: String::from("timebase-frequency"),
+                            value: Some(vec![CellArray(vec![U32(82_500_000)])]),
+                        },
+                        Property {
+                            name: String::from("next-level-cache"),
+                            value: Some(vec![CellArray(vec![Ref(String::from("L2_0"))])]),
+                        },
+                    ],
+                    children: vec![Node {
+                        name: String::from("l2-cache"),
+                        address: None,
+                        label: Some(String::from("L2_0")),
+                        props: vec![Property {
+                            name: String::from("compatible"),
+                            value: Some(vec![Str(String::from("cache"))]),
+                        }],
+                        children: vec![],
+                    }],
+                },
+                Node {
+                    name: String::from("cpu"),
+                    address: Some(String::from("1")),
+                    label: None,
+                    props: vec![
+                        Property {
+                            name: String::from("device_type"),
+                            value: Some(vec![Str(String::from("cpu"))]),
+                        },
+                        Property {
+                            name: String::from("reg"),
+                            value: Some(vec![CellArray(vec![U32(1)])]),
+                        },
+                    ],
+                    children: vec![Node {
+                        name: String::from("l2-cache"),
+                        address: None,
+                        label: Some(String::from("L2_1")),
+                        props: vec![Property {
+                            name: String::from("compatible"),
+                            value: Some(vec![Str(String::from("cache"))]),
+                        }],
+                        children: vec![],
+                    }],
+                },
+            ],
+        };
+
+        match node::<VerboseError<&str>>(input).finish() {
+            Ok(res) => assert_eq!(res, ("", exp)),
+            Err(e) => panic!("{}", convert_error(input, e)),
+        }
     }
 
     #[test]
     fn parse_includes() {
-        assert_eq!(
-            include(r#"#include <arm/pinctrl.h>"#),
-            Ok(("", Include::Global(String::from("arm/pinctrl.h"))))
-        );
-        assert_eq!(
-            include(r#"#include "sama5.dtsi""#),
-            Ok(("", Include::Local(String::from("sama5.dtsi"))))
-        );
+        for (input, inc) in [
+            (
+                r#"#include <arm/pinctrl.h>"#,
+                Include::Global(String::from("arm/pinctrl.h")),
+            ),
+            (
+                r#"#include "sama5.dtsi""#,
+                Include::Local(String::from("sama5.dtsi")),
+            ),
+        ] {
+            match include::<VerboseError<&str>>(input).finish() {
+                Ok(res) => assert_eq!(res, ("", inc)),
+                Err(e) => panic!("{}", convert_error(input, e)),
+            }
+        }
     }
 
     #[test]
     fn parse_simple_file() {
-        let dts = r#"/dts-v1/;
+        let input = r#"
+/dts-v1/;
 
 / {
     compatible = "acme,coyotes-revenge";
@@ -663,11 +895,13 @@ mod tests {
             reg = <2 0 0x4000000>;
         };
     };
-};"#;
-
-        let (rest, _) = dts_file(dts).unwrap();
+};
+"#;
 
         // Someday I'll write a proper test for the above file...
-        assert!(rest.is_empty());
+        match dts_file::<VerboseError<&str>>(input).finish() {
+            Ok((rest, _)) => assert!(rest.is_empty()),
+            Err(e) => panic!("{}", convert_error(input, e),),
+        }
     }
 }
