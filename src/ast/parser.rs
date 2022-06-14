@@ -16,7 +16,7 @@ use nom::{
 use crate::ast::*;
 
 /// Parse a Device Tree source file.
-pub fn parse<R: Read>(r: &mut R) -> Result<Dts> {
+pub fn from_reader(mut r: impl Read) -> Result<Dts> {
     let mut dts = String::new();
     r.read_to_string(&mut dts)?;
 
@@ -254,15 +254,15 @@ fn dec(input: &str) -> IResult<&str, u32> {
 }
 
 /// Consume a fixed symbol.
-fn symbol<'a>(s: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
+fn symbol<'a>(s: &'a str) -> impl FnMut(&'a str) -> IResult<&str, &str> {
     lexeme(tag(s))
 }
 
 /// Parse a lexeme using the combinator passed as its argument,
 /// also consuming zero or more trailing whitespaces.
-fn lexeme<'a, O, F>(f: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>
+fn lexeme<'a, O, F>(f: F) -> impl FnMut(&'a str) -> IResult<&str, O>
 where
-    F: FnMut(&'a str) -> IResult<&'a str, O>,
+    F: FnMut(&'a str) -> IResult<&str, O>,
 {
     terminated(f, sc)
 }
