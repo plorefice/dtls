@@ -17,8 +17,8 @@ use crate::ast::*;
 
 /// Parse a Device Tree source file.
 pub fn parse<R: Read>(r: &mut R) -> Result<Dts> {
-    let mut dts = Vec::new();
-    r.read_to_end(&mut dts)?;
+    let mut dts = String::new();
+    r.read_to_string(&mut dts)?;
 
     let dts = match dts_file(&dts) {
         Ok((_, dts)) => dts,
@@ -29,7 +29,7 @@ pub fn parse<R: Read>(r: &mut R) -> Result<Dts> {
 }
 
 /// Parse a Device Tree source file.
-fn dts_file(input: &[u8]) -> IResult<&[u8], Dts> {
+fn dts_file(input: &str) -> IResult<&str, Dts> {
     enum FileContent {
         Include(Include),
         Node(Node),
@@ -63,8 +63,8 @@ fn dts_file(input: &[u8]) -> IResult<&[u8], Dts> {
     )(input)
 }
 
-fn version_directive(input: &[u8]) -> IResult<&[u8], DtsVersion> {
-    map(opt(terminated(symbol(b"/dts-v1/"), symbol(b";"))), |v| {
+fn version_directive(input: &str) -> IResult<&str, DtsVersion> {
+    map(opt(terminated(symbol("/dts-v1/"), symbol(";"))), |v| {
         if v.is_some() {
             DtsVersion::V1
         } else {
@@ -74,29 +74,29 @@ fn version_directive(input: &[u8]) -> IResult<&[u8], DtsVersion> {
 }
 
 /// Parse an include directive.
-fn include(input: &[u8]) -> IResult<&[u8], Include> {
+fn include(input: &str) -> IResult<&str, Include> {
     preceded(
-        symbol(b"#include"),
+        symbol("#include"),
         alt((
-            map(include_path, Include::Global),
-            map(string_literal, Include::Local),
+            map(include_path, |s| Include::Global(s.to_string())),
+            map(string_literal, |s| Include::Local(s.to_string())),
         )),
     )(input)
 }
 
 /// Parse a device tree node.
-fn node(input: &[u8]) -> IResult<&[u8], Node> {
+fn node(input: &str) -> IResult<&str, Node> {
     map(
         tuple((
-            opt(terminated(node_label, symbol(b":"))),
+            opt(terminated(node_label, symbol(":"))),
             node_name,
-            delimited(symbol(b"{"), node_contents, symbol(b"}")),
-            symbol(b";"),
+            delimited(symbol("{"), node_contents, symbol("}")),
+            symbol(";"),
         )),
         |(label, (name, address), (props, children), _)| Node {
-            name: String::from_utf8_lossy(name).to_string(),
-            address: address.map(|address| String::from_utf8_lossy(address).to_string()),
-            label: label.map(|label| String::from_utf8_lossy(label).to_string()),
+            name: name.to_string(),
+            address: address.map(|address| address.to_string()),
+            label: label.map(|label| label.to_string()),
             props,
             children,
         },
@@ -104,7 +104,7 @@ fn node(input: &[u8]) -> IResult<&[u8], Node> {
 }
 
 /// Parse the contents of a node.
-fn node_contents(input: &[u8]) -> IResult<&[u8], (Vec<Property>, Vec<Node>)> {
+fn node_contents(input: &str) -> IResult<&str, (Vec<Property>, Vec<Node>)> {
     enum NodeContent {
         Prop(Property),
         Node(Node),
@@ -133,154 +133,142 @@ fn node_contents(input: &[u8]) -> IResult<&[u8], (Vec<Property>, Vec<Node>)> {
 }
 
 /// Parse a node property.
-fn property(input: &[u8]) -> IResult<&[u8], Property> {
+fn property(input: &str) -> IResult<&str, Property> {
     map(
         tuple((
             lexeme(prop_name),
             opt(preceded(
-                symbol(b"="),
+                symbol("="),
                 separated_list1(
-                    symbol(b","),
+                    symbol(","),
                     alt((prop_value_cell_array, prop_value_alias, prop_value_str)),
                 ),
             )),
-            symbol(b";"),
+            symbol(";"),
         )),
         |(name, value, _)| Property {
-            name: String::from_utf8_lossy(name).to_string(),
+            name: name.to_string(),
             value,
         },
     )(input)
 }
 
 /// Parse a property value corresponding to a reference to another node.
-fn prop_value_alias(input: &[u8]) -> IResult<&[u8], PropertyValue> {
-    map(node_reference, |r| {
-        PropertyValue::Alias(String::from_utf8_lossy(r).to_string())
-    })(input)
+fn prop_value_alias(input: &str) -> IResult<&str, PropertyValue> {
+    map(node_reference, |s| PropertyValue::Alias(s.to_string()))(input)
 }
 
 /// Parse a property value corresponding to a string.
-fn prop_value_str(input: &[u8]) -> IResult<&[u8], PropertyValue> {
-    map(string_literal, PropertyValue::Str)(input)
+fn prop_value_str(input: &str) -> IResult<&str, PropertyValue> {
+    map(string_literal, |s| PropertyValue::Str(s.to_string()))(input)
 }
 
 /// Parse a property value corresponding to a cell array.
-fn prop_value_cell_array(input: &[u8]) -> IResult<&[u8], PropertyValue> {
+fn prop_value_cell_array(input: &str) -> IResult<&str, PropertyValue> {
     map(
         delimited(
-            symbol(b"<"),
+            symbol("<"),
             many1(alt((prop_cell_u32, prop_cell_ref))),
-            symbol(b">"),
+            symbol(">"),
         ),
         PropertyValue::CellArray,
     )(input)
 }
 
 /// Parse a property cell containing a reference to another node.
-fn prop_cell_ref(input: &[u8]) -> IResult<&[u8], PropertyCell> {
-    map(node_reference, |r| {
-        PropertyCell::Ref(String::from_utf8_lossy(r).to_string())
-    })(input)
+fn prop_cell_ref(input: &str) -> IResult<&str, PropertyCell> {
+    map(node_reference, |s| PropertyCell::Ref(s.to_string()))(input)
 }
 
 /// Parse a property cell containing a 32-bit integer cell.
-fn prop_cell_u32(input: &[u8]) -> IResult<&[u8], PropertyCell> {
+fn prop_cell_u32(input: &str) -> IResult<&str, PropertyCell> {
     map(numeric_literal, PropertyCell::U32)(input)
 }
 
 /// Parse a valid property name.
-fn prop_name(input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn prop_name(input: &str) -> IResult<&str, &str> {
     recognize(many1(alt((alphanumeric1, is_a(",._+?#-")))))(input)
 }
 
 /// Parse a valid node reference.
-fn node_reference(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    lexeme(preceded(symbol(b"&"), node_label))(input)
+fn node_reference(input: &str) -> IResult<&str, &str> {
+    lexeme(preceded(symbol("&"), node_label))(input)
 }
 
 /// Parse a valid node label.
-fn node_label(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    lexeme(recognize(many1(alt((alphanumeric1, symbol(b"_"))))))(input)
+fn node_label(input: &str) -> IResult<&str, &str> {
+    lexeme(recognize(many1(alt((alphanumeric1, symbol("_"))))))(input)
 }
 
 /// Parse a valid node name.
 /// A node name has composed of a node-name part and an optional node-address in hex format.
 #[allow(clippy::type_complexity)]
-fn node_name(input: &[u8]) -> IResult<&[u8], (&[u8], Option<&[u8]>)> {
+fn node_name(input: &str) -> IResult<&str, (&str, Option<&str>)> {
     lexeme(pair(node_name_identifier, opt(node_address_identifier)))(input)
 }
 
 /// Parse a valid node name identifier,
 /// ie. the part of the node name before the unit-address.
-fn node_name_identifier(input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn node_name_identifier(input: &str) -> IResult<&str, &str> {
     alt((
-        symbol(b"/"),
+        symbol("/"),
         recognize(tuple((alpha1, many0(alt((alphanumeric1, is_a(",._+-"))))))),
     ))(input)
 }
 
 /// Parse a valid node unit-address identifier.
-fn node_address_identifier(input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn node_address_identifier(input: &str) -> IResult<&str, &str> {
     preceded(
-        symbol(b"@"),
+        symbol("@"),
         recognize(many1(alt((alphanumeric1, is_a(",._+-"))))),
     )(input)
 }
 
 /// Parse a valid number in any base.
-fn numeric_literal(input: &[u8]) -> IResult<&[u8], u32> {
+fn numeric_literal(input: &str) -> IResult<&str, u32> {
     lexeme(alt((hex, dec)))(input)
 }
 
 /// Parse a valid global include path.
-fn include_path(input: &[u8]) -> IResult<&[u8], String> {
-    map(
-        lexeme(delimited(symbol(b"<"), is_not(">"), symbol(b">"))),
-        |s| String::from_utf8_lossy(s).to_string(),
-    )(input)
+fn include_path(input: &str) -> IResult<&str, &str> {
+    lexeme(delimited(symbol("<"), is_not(">"), symbol(">")))(input)
 }
 
 /// Parse a valid string literal.
-fn string_literal(input: &[u8]) -> IResult<&[u8], String> {
-    map(
-        lexeme(delimited(symbol(b"\""), is_not("\""), symbol(b"\""))),
-        |s| String::from_utf8_lossy(s).to_string(),
-    )(input)
+fn string_literal(input: &str) -> IResult<&str, &str> {
+    lexeme(delimited(symbol("\""), is_not("\""), symbol("\"")))(input)
 }
 
 /* === Utility functions === */
 
 /// Parse a natural number in base 16, prefixed by `0x`.
-fn hex(input: &[u8]) -> IResult<&[u8], u32> {
-    map_res(preceded(symbol(b"0x"), hex_digit1), |input| {
-        u32::from_str_radix(str::from_utf8(input).unwrap(), 16)
+fn hex(input: &str) -> IResult<&str, u32> {
+    map_res(preceded(symbol("0x"), hex_digit1), |input: &str| {
+        u32::from_str_radix(input, 16)
     })(input)
 }
 
 /// Parse a natural number in base 10.
-fn dec(input: &[u8]) -> IResult<&[u8], u32> {
-    map_res(digit1, |input| {
-        str::from_utf8(input).unwrap().parse::<u32>()
-    })(input)
+fn dec(input: &str) -> IResult<&str, u32> {
+    map_res(digit1, |input: &str| input.parse::<u32>())(input)
 }
 
 /// Consume a fixed symbol.
-fn symbol<'a>(s: &'a [u8]) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
+fn symbol<'a>(s: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
     lexeme(tag(s))
 }
 
 /// Parse a lexeme using the combinator passed as its argument,
 /// also consuming zero or more trailing whitespaces.
-fn lexeme<'a, O, F>(f: F) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], O>
+fn lexeme<'a, O, F>(f: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>
 where
-    F: FnMut(&'a [u8]) -> IResult<&'a [u8], O>,
+    F: FnMut(&'a str) -> IResult<&'a str, O>,
 {
     terminated(f, sc)
 }
 
 /// Consume zero or more white space characters or line comments.
-fn sc(input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn sc(input: &str) -> IResult<&str, &str> {
     recognize(many0(alt((
         multispace1,
         skip_line_comment,
@@ -289,14 +277,14 @@ fn sc(input: &[u8]) -> IResult<&[u8], &[u8]> {
 }
 
 /// Return a parser that skips block comments.
-fn skip_block_comment(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    recognize(preceded(symbol(b"/*"), many_till(anychar, symbol(b"*/"))))(input)
+fn skip_block_comment(input: &str) -> IResult<&str, &str> {
+    recognize(preceded(symbol("/*"), many_till(anychar, symbol("*/"))))(input)
 }
 
 /// Return a parser that skips line comments.
 /// Note that it stops just before the newline character but doesn't consume the newline.
-fn skip_line_comment(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    recognize(preceded(symbol(b"//"), many_till(anychar, line_ending)))(input)
+fn skip_line_comment(input: &str) -> IResult<&str, &str> {
+    recognize(preceded(symbol("//"), many_till(anychar, line_ending)))(input)
 }
 
 /* === Unit Tests === */
@@ -311,16 +299,16 @@ mod tests {
     #[test]
     fn parse_line_comments() {
         assert_eq!(
-            skip_line_comment(b"// This is a comment\n"),
-            Ok((&b""[..], &b"// This is a comment\n"[..]))
+            skip_line_comment("// This is a comment\n"),
+            Ok(("", "// This is a comment\n"))
         );
 
         assert_eq!(
-            skip_line_comment(b"// Multiline comments\nare not supported"),
-            Ok((&b"are not supported"[..], &b"// Multiline comments\n"[..]))
+            skip_line_comment("// Multiline comments\nare not supported"),
+            Ok(("are not supported", "// Multiline comments\n"))
         );
 
-        assert!(skip_line_comment(&br#"prop-name = "value"; // This is a comment"#[..]).is_err());
+        assert!(skip_line_comment(r#"prop-name = "value"; // This is a comment"#).is_err());
     }
 
     #[test]
@@ -341,20 +329,14 @@ mod tests {
         ]
         .into_iter()
         {
-            assert_eq!(
-                node_name(input.as_bytes()),
-                Ok((&b""[..], (name.as_bytes(), address.map(|a| a.as_bytes()))))
-            );
+            assert_eq!(node_name(input), Ok(("", (name, address))));
         }
     }
 
     #[test]
     fn parse_node_labels() {
         for label in vec!["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"].into_iter() {
-            assert_eq!(
-                node_label(label.as_bytes()),
-                Ok((&b""[..], label.as_bytes()))
-            );
+            assert_eq!(node_label(label), Ok(("", label)));
         }
     }
 
@@ -374,7 +356,7 @@ mod tests {
         ]
         .into_iter()
         {
-            assert_eq!(prop_name(name.as_bytes()), Ok((&b""[..], name.as_bytes())));
+            assert_eq!(prop_name(name), Ok(("", name)));
         }
     }
 
@@ -453,7 +435,7 @@ mod tests {
         ]
         .into_iter()
         {
-            assert_eq!(property(input.as_bytes()), Ok((&b""[..], prop)));
+            assert_eq!(property(input), Ok(("", prop)));
         }
     }
 
@@ -461,7 +443,7 @@ mod tests {
     fn parse_nodes() {
         assert_eq!(
             node(
-                br#"cpus {
+                r#"cpus {
                         #address-cells = <1>;
                         #size-cells = <0>;
 
@@ -491,7 +473,7 @@ mod tests {
             "#
             ),
             Ok((
-                &b""[..],
+                "",
                 Node {
                     name: String::from("cpus"),
                     address: None,
@@ -586,18 +568,18 @@ mod tests {
     #[test]
     fn parse_includes() {
         assert_eq!(
-            include(br#"#include <arm/pinctrl.h>"#),
-            Ok((&b""[..], Include::Global(String::from("arm/pinctrl.h"))))
+            include(r#"#include <arm/pinctrl.h>"#),
+            Ok(("", Include::Global(String::from("arm/pinctrl.h"))))
         );
         assert_eq!(
-            include(br#"#include "sama5.dtsi""#),
-            Ok((&b""[..], Include::Local(String::from("sama5.dtsi"))))
+            include(r#"#include "sama5.dtsi""#),
+            Ok(("", Include::Local(String::from("sama5.dtsi"))))
         );
     }
 
     #[test]
     fn parse_simple_file() {
-        let dts = br#"/dts-v1/;
+        let dts = r#"/dts-v1/;
 
 / {
     compatible = "acme,coyotes-revenge";
