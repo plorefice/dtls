@@ -9,5 +9,5 @@ fn main() {
         Box::new(std::io::stdin())
     };
 
-    println!("{:#?}", ast::from_reader(&mut reader));
+    println!("{:?}", ast::from_reader(&mut reader));
 }

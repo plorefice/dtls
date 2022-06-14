@@ -45,6 +45,21 @@ pub enum PropertyValue {
 
 #[derive(Debug, PartialEq)]
 pub enum PropertyCell {
-    U32(u32),
     Ref(String),
+    Expr(IntegerExpression),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntegerExpression {
+    Lit(u32),
+    Binary(
+        Box<IntegerExpression>,
+        BinaryOperator,
+        Box<IntegerExpression>,
+    ),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOperator {
+    LShift,
 }

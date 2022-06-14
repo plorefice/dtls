@@ -8,10 +8,10 @@ use nom::{
         alphanumeric1, anychar, char, hex_digit1, line_ending, multispace1, space1, u32,
     },
     combinator::{cut, map, opt, recognize},
-    error::ParseError,
+    error::{convert_error, ParseError, VerboseError},
     multi::{many0, many1, many_m_n, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
-    IResult,
+    Finish, IResult,
 };
 
 use crate::ast::*;
@@ -21,9 +21,9 @@ pub fn from_reader(mut r: impl Read) -> Result<Dts> {
     let mut dts = String::new();
     r.read_to_string(&mut dts)?;
 
-    let dts = match dts_file::<nom::error::Error<&str>>(&dts) {
+    let dts = match dts_file::<VerboseError<&str>>(&dts).finish() {
         Ok((_, dts)) => dts,
-        Err(e) => bail!("{:?}", e.to_string()),
+        Err(e) => bail!("{}", convert_error(dts.as_str(), e)),
     };
 
     Ok(dts)
@@ -217,7 +217,7 @@ where
         preceded(
             cell_array_start,
             cut(terminated(
-                many1(alt((prop_cell_u32, prop_cell_ref))),
+                many1(alt((prop_cell_expr, prop_cell_ref))),
                 cell_array_end,
             )),
         ),
@@ -233,12 +233,12 @@ where
     lexeme(map(node_reference, |s| PropertyCell::Ref(s.to_string())))(input)
 }
 
-/// Parse a property cell containing a 32-bit integer cell.
-fn prop_cell_u32<'a, E>(input: &'a str) -> IResult<&'a str, PropertyCell, E>
+/// Parse a property cell containing an integer expression.
+fn prop_cell_expr<'a, E>(input: &'a str) -> IResult<&'a str, PropertyCell, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(map(numeric_literal, PropertyCell::U32))(input)
+    lexeme(map(integer_expr, PropertyCell::Expr))(input)
 }
 
 /// Parse a valid node reference.
@@ -274,6 +274,37 @@ where
     E: ParseError<&'a str>,
 {
     preceded(char('@'), cut(node_name_str))(input)
+}
+
+fn integer_expr<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
+where
+    E: ParseError<&'a str>,
+{
+    alt((integer_expr_paren, integer_expr_lit))(input)
+}
+
+fn integer_expr_lit<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(numeric_literal, IntegerExpression::Lit)(input)
+}
+
+fn integer_expr_paren<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
+where
+    E: ParseError<&'a str>,
+{
+    preceded(paren_start, cut(terminated(integer_expr_binary, paren_end)))(input)
+}
+
+fn integer_expr_binary<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(
+        tuple((integer_expr, arith_operator_binary, cut(integer_expr))),
+        |(left, op, right)| IntegerExpression::Binary(Box::new(left), op, Box::new(right)),
+    )(input)
 }
 
 /// Parse a valid number in any base.
@@ -381,6 +412,30 @@ where
     E: ParseError<&'a str>,
 {
     lexeme(char('>'))(input)
+}
+
+/// Recognize the start of a parenthesis.
+fn paren_start<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('('))(input)
+}
+
+/// Recognize the end of a parenthesis.
+fn paren_end<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char(')'))(input)
+}
+
+/// Recognize an arithmetic binary operator.
+fn arith_operator_binary<'a, E>(input: &'a str) -> IResult<&'a str, BinaryOperator, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(map(tag("<<"), |_| BinaryOperator::LShift))(input)
 }
 
 /// Parse a natural number in base 16, prefixed by `0x`.
@@ -509,8 +564,6 @@ mod tests {
         error::{convert_error, VerboseError},
         Finish,
     };
-    use PropertyCell::*;
-    use PropertyValue::*;
 
     #[test]
     fn parse_line_comments() {
@@ -586,6 +639,10 @@ mod tests {
 
     #[test]
     fn parse_properties() {
+        use IntegerExpression::*;
+        use PropertyCell::*;
+        use PropertyValue::*;
+
         for (input, prop) in [
             (
                 r#"device_type = "cpu";"#,
@@ -609,7 +666,11 @@ mod tests {
                 Property {
                     name: String::from("example"),
                     value: Some(vec![
-                        CellArray(vec![Ref(String::from("mpic")), U32(0xf00f_0000), U32(19)]),
+                        CellArray(vec![
+                            Ref(String::from("mpic")),
+                            Expr(Lit(0xf00f_0000)),
+                            Expr(Lit(19)),
+                        ]),
                         Str(String::from("a strange property format")),
                     ]),
                 },
@@ -618,7 +679,7 @@ mod tests {
                 r#"reg = <0>;"#,
                 Property {
                     name: String::from("reg"),
-                    value: Some(vec![CellArray(vec![U32(0)])]),
+                    value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
                 },
             ),
             (
@@ -632,7 +693,7 @@ mod tests {
                 r#"cache-size = <0x8000>;"#,
                 Property {
                     name: String::from("cache-size"),
-                    value: Some(vec![CellArray(vec![U32(0x8000)])]),
+                    value: Some(vec![CellArray(vec![Expr(Lit(0x8000))])]),
                 },
             ),
             (
@@ -646,7 +707,7 @@ mod tests {
                 r#"interrupts = <17 0xc>;"#,
                 Property {
                     name: String::from("interrupts"),
-                    value: Some(vec![CellArray(vec![U32(17), U32(0xc)])]),
+                    value: Some(vec![CellArray(vec![Expr(Lit(17)), Expr(Lit(0xc))])]),
                 },
             ),
             (
@@ -666,6 +727,10 @@ mod tests {
 
     #[test]
     fn parse_nodes() {
+        use IntegerExpression::*;
+        use PropertyCell::*;
+        use PropertyValue::*;
+
         let input = r#"cpus {
             #address-cells = <1>;
             #size-cells = <0>;
@@ -702,11 +767,11 @@ mod tests {
             props: vec![
                 Property {
                     name: String::from("#address-cells"),
-                    value: Some(vec![CellArray(vec![U32(1)])]),
+                    value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
                 },
                 Property {
                     name: String::from("#size-cells"),
-                    value: Some(vec![CellArray(vec![U32(0)])]),
+                    value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
                 },
             ],
             children: vec![
@@ -721,7 +786,7 @@ mod tests {
                         },
                         Property {
                             name: String::from("reg"),
-                            value: Some(vec![CellArray(vec![U32(0)])]),
+                            value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
                         },
                         Property {
                             name: String::from("cache-unified"),
@@ -729,15 +794,15 @@ mod tests {
                         },
                         Property {
                             name: String::from("cache-size"),
-                            value: Some(vec![CellArray(vec![U32(0x8000)])]),
+                            value: Some(vec![CellArray(vec![Expr(Lit(0x8000))])]),
                         },
                         Property {
                             name: String::from("cache-block-size"),
-                            value: Some(vec![CellArray(vec![U32(32)])]),
+                            value: Some(vec![CellArray(vec![Expr(Lit(32))])]),
                         },
                         Property {
                             name: String::from("timebase-frequency"),
-                            value: Some(vec![CellArray(vec![U32(82_500_000)])]),
+                            value: Some(vec![CellArray(vec![Expr(Lit(82_500_000))])]),
                         },
                         Property {
                             name: String::from("next-level-cache"),
@@ -766,7 +831,7 @@ mod tests {
                         },
                         Property {
                             name: String::from("reg"),
-                            value: Some(vec![CellArray(vec![U32(1)])]),
+                            value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
                         },
                     ],
                     children: vec![Node {
