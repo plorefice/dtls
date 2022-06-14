@@ -40,6 +40,7 @@ pub struct Property {
 pub enum PropertyValue {
     Str(String),
     Alias(String),
+    Bytestring(Vec<u8>),
     CellArray(Vec<PropertyCell>),
 }
 

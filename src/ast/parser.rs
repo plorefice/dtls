@@ -3,13 +3,13 @@ use std::{io::Read, str};
 use anyhow::{bail, Result};
 use nom::{
     branch::alt,
-    bytes::complete::{is_a, is_not, tag},
+    bytes::complete::{is_a, is_not, tag, take_while_m_n},
     character::complete::{
         alphanumeric1, anychar, char, hex_digit1, line_ending, multispace1, space1, u32,
     },
     combinator::{cut, map, opt, recognize},
     error::{convert_error, ParseError, VerboseError},
-    multi::{many0, many1, many_m_n, many_till, separated_list1},
+    multi::{many0, many1, many_m_n, many_till, separated_list0, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
     Finish, IResult,
 };
@@ -188,7 +188,12 @@ where
 {
     separated_list1(
         list_separator,
-        alt((prop_value_cell_array, prop_value_alias, prop_value_str)),
+        alt((
+            prop_value_cell_array,
+            prop_value_bytestring,
+            prop_value_alias,
+            prop_value_str,
+        )),
     )(input)
 }
 
@@ -222,6 +227,20 @@ where
             )),
         ),
         PropertyValue::CellArray,
+    )(input)
+}
+
+/// Parse a property value corresponding to a byte string.
+fn prop_value_bytestring<'a, E>(input: &'a str) -> IResult<&'a str, PropertyValue, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(
+        preceded(
+            bracket_start,
+            cut(terminated(separated_list0(opt(ws), hex_byte), bracket_end)),
+        ),
+        PropertyValue::Bytestring,
     )(input)
 }
 
@@ -436,6 +455,22 @@ where
     lexeme(char(')'))(input)
 }
 
+/// Recognize the start of a bracket.
+fn bracket_start<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('['))(input)
+}
+
+/// Recognize the end of a bracket.
+fn bracket_end<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char(']'))(input)
+}
+
 /// Recognize an arithmetic binary operator.
 fn arith_operator_binary<'a, E>(input: &'a str) -> IResult<&'a str, BinaryOperator, E>
 where
@@ -470,6 +505,16 @@ where
     E: ParseError<&'a str>,
 {
     u32(input)
+}
+
+/// Parse a byte represented by two hex digits.
+fn hex_byte<'a, E>(input: &'a str) -> IResult<&'a str, u8, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(take_while_m_n(2, 2, |c: char| c.is_digit(16)), |s: &str| {
+        u8::from_str_radix(s, 16).unwrap()
+    })(input)
 }
 
 /// Recognize a sequence of printable ASCII characters.
