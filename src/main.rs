@@ -9,5 +9,8 @@ fn main() {
         Box::new(std::io::stdin())
     };
 
-    println!("{:?}", ast::from_reader(&mut reader));
+    match ast::from_reader(&mut reader) {
+        Ok(ast) => println!("{:?}", ast),
+        Err(e) => panic!("{}", e),
+    }
 }

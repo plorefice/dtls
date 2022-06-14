@@ -61,5 +61,13 @@ pub enum IntegerExpression {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOperator {
+    Add,
+    Sub,
+    Mul,
+    Div,
     LShift,
+    RShift,
+    BitAnd,
+    BitOr,
+    BitXor,
 }

@@ -294,7 +294,13 @@ fn integer_expr_paren<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpressi
 where
     E: ParseError<&'a str>,
 {
-    preceded(paren_start, cut(terminated(integer_expr_binary, paren_end)))(input)
+    preceded(
+        paren_start,
+        cut(terminated(
+            alt((integer_expr_binary, integer_expr_lit)),
+            paren_end,
+        )),
+    )(input)
 }
 
 fn integer_expr_binary<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression, E>
@@ -435,7 +441,17 @@ fn arith_operator_binary<'a, E>(input: &'a str) -> IResult<&'a str, BinaryOperat
 where
     E: ParseError<&'a str>,
 {
-    lexeme(map(tag("<<"), |_| BinaryOperator::LShift))(input)
+    lexeme(alt((
+        map(tag("+"), |_| BinaryOperator::Add),
+        map(tag("-"), |_| BinaryOperator::Sub),
+        map(tag("*"), |_| BinaryOperator::Mul),
+        map(tag("/"), |_| BinaryOperator::Div),
+        map(tag("<<"), |_| BinaryOperator::LShift),
+        map(tag(">>"), |_| BinaryOperator::RShift),
+        map(tag("&"), |_| BinaryOperator::BitAnd),
+        map(tag("|"), |_| BinaryOperator::BitOr),
+        map(tag("^"), |_| BinaryOperator::BitXor),
+    )))(input)
 }
 
 /// Parse a natural number in base 16, prefixed by `0x`.
