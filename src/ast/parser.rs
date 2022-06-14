@@ -1,7 +1,6 @@
-use super::*;
+use std::{io::Read, str};
 
-use failure::{format_err, Error};
-
+use anyhow::{bail, Result};
 use nom::{
     branch::alt,
     bytes::complete::{is_a, is_not, tag},
@@ -9,30 +8,24 @@ use nom::{
         alpha1, alphanumeric1, anychar, digit1, hex_digit1, line_ending, multispace1,
     },
     combinator::{map, map_res, opt, recognize},
-    multi::{many0, many1, many_till, separated_list},
+    multi::{many0, many1, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
 
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
-
-pub type Result<T> = std::result::Result<T, Error>;
+use crate::ast::*;
 
 /// Parse a Device Tree source file.
 pub fn parse<R: Read>(r: &mut R) -> Result<Dts> {
     let mut dts = Vec::new();
     r.read_to_end(&mut dts)?;
 
-    Ok(dts_file(&dts)
-        .map_err(|e| format_err!("nom error: {:?}", e))?
-        .1)
-}
+    let dts = match dts_file(&dts) {
+        Ok((_, dts)) => dts,
+        Err(e) => bail!("{:?}", e.to_string()),
+    };
 
-/// Parse a Device Tree source file.
-pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Dts> {
-    parse(&mut File::open(path)?)
+    Ok(dts)
 }
 
 /// Parse a Device Tree source file.
@@ -40,7 +33,7 @@ fn dts_file(input: &[u8]) -> IResult<&[u8], Dts> {
     enum FileContent {
         Include(Include),
         Node(Node),
-    };
+    }
 
     // Trim leading commends/spaces
     let (input, _) = sc(input)?;
@@ -102,8 +95,8 @@ fn node(input: &[u8]) -> IResult<&[u8], Node> {
         )),
         |(label, (name, address), (props, children), _)| Node {
             name: String::from_utf8_lossy(name).to_string(),
-            address: address.and_then(|address| Some(String::from_utf8_lossy(address).to_string())),
-            label: label.and_then(|label| Some(String::from_utf8_lossy(label).to_string())),
+            address: address.map(|address| String::from_utf8_lossy(address).to_string()),
+            label: label.map(|label| String::from_utf8_lossy(label).to_string()),
             props,
             children,
         },
@@ -115,7 +108,7 @@ fn node_contents(input: &[u8]) -> IResult<&[u8], (Vec<Property>, Vec<Node>)> {
     enum NodeContent {
         Prop(Property),
         Node(Node),
-    };
+    }
 
     // A node can contain 0+ properties and 0+ child nodes.
     // To make the parsing easier, wrap them both in a `NodeContent` enum
@@ -146,7 +139,7 @@ fn property(input: &[u8]) -> IResult<&[u8], Property> {
             lexeme(prop_name),
             opt(preceded(
                 symbol(b"="),
-                separated_list(
+                separated_list1(
                     symbol(b","),
                     alt((prop_value_cell_array, prop_value_alias, prop_value_str)),
                 ),
@@ -213,6 +206,7 @@ fn node_label(input: &[u8]) -> IResult<&[u8], &[u8]> {
 
 /// Parse a valid node name.
 /// A node name has composed of a node-name part and an optional node-address in hex format.
+#[allow(clippy::type_complexity)]
 fn node_name(input: &[u8]) -> IResult<&[u8], (&[u8], Option<&[u8]>)> {
     lexeme(pair(node_name_identifier, opt(node_address_identifier)))(input)
 }
@@ -260,27 +254,27 @@ fn string_literal(input: &[u8]) -> IResult<&[u8], String> {
 /// Parse a natural number in base 16, prefixed by `0x`.
 fn hex(input: &[u8]) -> IResult<&[u8], u32> {
     map_res(preceded(symbol(b"0x"), hex_digit1), |input| {
-        u32::from_str_radix(std::str::from_utf8(input).unwrap(), 16)
+        u32::from_str_radix(str::from_utf8(input).unwrap(), 16)
     })(input)
 }
 
 /// Parse a natural number in base 10.
 fn dec(input: &[u8]) -> IResult<&[u8], u32> {
     map_res(digit1, |input| {
-        u32::from_str_radix(std::str::from_utf8(input).unwrap(), 10)
+        str::from_utf8(input).unwrap().parse::<u32>()
     })(input)
 }
 
 /// Consume a fixed symbol.
-fn symbol<'a>(s: &'a [u8]) -> impl Fn(&'a [u8]) -> IResult<&'a [u8], &'a [u8]> + 'a {
+fn symbol<'a>(s: &'a [u8]) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     lexeme(tag(s))
 }
 
 /// Parse a lexeme using the combinator passed as its argument,
 /// also consuming zero or more trailing whitespaces.
-fn lexeme<'a, O: 'a, F: 'a>(f: F) -> impl Fn(&'a [u8]) -> IResult<&'a [u8], O> + 'a
+fn lexeme<'a, O, F>(f: F) -> impl FnMut(&'a [u8]) -> IResult<&'a [u8], O>
 where
-    F: Fn(&'a [u8]) -> IResult<&'a [u8], O> + 'a,
+    F: FnMut(&'a [u8]) -> IResult<&'a [u8], O>,
 {
     terminated(f, sc)
 }
@@ -349,10 +343,7 @@ mod tests {
         {
             assert_eq!(
                 node_name(input.as_bytes()),
-                Ok((
-                    &b""[..],
-                    (name.as_bytes(), address.and_then(|a| Some(a.as_bytes())))
-                ))
+                Ok((&b""[..], (name.as_bytes(), address.map(|a| a.as_bytes()))))
             );
         }
     }

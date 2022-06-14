@@ -2,10 +2,10 @@
 name = "dtls"
 version = "0.1.0"
 authors = ["Pietro Lorefice <pietro.lorefice@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-failure = "0.1.6"
-nom = "5.0.1"
+anyhow = "1"
+nom = "7"

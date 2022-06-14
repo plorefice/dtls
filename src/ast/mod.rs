@@ -1,6 +1,6 @@
-mod parser;
-
 pub use parser::*;
+
+mod parser;
 
 #[derive(Debug, PartialEq)]
 pub struct Dts {

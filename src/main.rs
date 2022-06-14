@@ -1,14 +1,12 @@
+use std::{env, fs::File, io::Read};
+
 mod ast;
 
-use std::env;
-use std::fs::File;
-use std::io::Read;
-
 fn main() {
-    let mut reader = if let Some(fname) = env::args().nth(1) {
-        Box::new(File::open(fname).unwrap()) as Box<Read>
+    let mut reader: Box<dyn Read> = if let Some(fname) = env::args().nth(1) {
+        Box::new(File::open(fname).unwrap())
     } else {
-        Box::new(std::io::stdin()) as Box<Read>
+        Box::new(std::io::stdin())
     };
 
     println!("{:#?}", ast::parse(&mut reader));
