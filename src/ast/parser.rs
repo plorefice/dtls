@@ -36,31 +36,37 @@ where
     E: ParseError<&'a str>,
 {
     enum TopLevelContents {
-        Include(String),
         Node(Node),
+        Include(String),
+        VersionDirective,
     }
-
-    let (input, version) = version_directive(input)?;
 
     let root_node = map(root_node, TopLevelContents::Node);
     let node_override = map(node_override, TopLevelContents::Node);
+    let version_directive = map(version_directive, |_| TopLevelContents::VersionDirective);
     let include_directive = map(include_directive, |s| {
         TopLevelContents::Include(s.to_string())
     });
 
     map(
-        many0(alt((root_node, node_override, include_directive))),
+        many0(alt((
+            root_node,
+            node_override,
+            version_directive,
+            include_directive,
+        ))),
         move |contents| {
             let mut dts = Dts {
-                version,
+                version: DtsVersion::V0,
                 includes: vec![],
                 nodes: vec![],
             };
 
             for content in contents {
                 match content {
-                    TopLevelContents::Include(inc) => dts.includes.push(inc),
                     TopLevelContents::Node(node) => dts.nodes.push(node),
+                    TopLevelContents::Include(inc) => dts.includes.push(inc),
+                    TopLevelContents::VersionDirective => dts.version = DtsVersion::V1,
                 }
             }
 
@@ -74,16 +80,9 @@ fn version_directive<'a, E>(input: &'a str) -> IResult<&'a str, DtsVersion, E>
 where
     E: ParseError<&'a str>,
 {
-    map(
-        opt(terminated(lexeme(tag("/dts-v1/")), cut(terminator))),
-        |v| {
-            if v.is_some() {
-                DtsVersion::V1
-            } else {
-                DtsVersion::V0
-            }
-        },
-    )(input)
+    map(terminated(dts_v1_keyword, cut(terminator)), |_| {
+        DtsVersion::V1
+    })(input)
 }
 
 /// Parse a valid root node.
@@ -478,7 +477,7 @@ where
     E: ParseError<&'a str>,
 {
     preceded(
-        include_prefix,
+        include_keyword,
         cut(delimited(char('"'), include_path_str, char('"'))),
     )(input)
 }
@@ -658,14 +657,6 @@ where
     ))))(input)
 }
 
-/// Recognize an include directive prefix.
-fn include_prefix<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
-where
-    E: ParseError<&'a str>,
-{
-    lexeme(tag("/include/"))(input)
-}
-
 /// Recognize a valid path in an `/include/` directive.
 fn include_path_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
@@ -698,6 +689,14 @@ where
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+?#-")))))(input)
 }
 
+/// Recognize an include directive prefix.
+fn include_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(tag("/include/"))(input)
+}
+
 /// Recognize the `/bits/` keyword.
 fn bits_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
@@ -712,6 +711,14 @@ where
     E: ParseError<&'a str>,
 {
     lexeme(tag("/delete-property/"))(input)
+}
+
+/// Recognize the `/dts-v1/` keyword.
+fn dts_v1_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(tag("/dts-v1/"))(input)
 }
 
 /* === Utility functions === */
@@ -1181,6 +1188,29 @@ mod tests {
                 Ok(res) => assert_eq!(res, ("", exp.unwrap())),
                 Err(_) => assert!(exp.is_none()),
             }
+        }
+    }
+
+    #[test]
+    fn parse_multiple_version_directives() {
+        let input = r#"/dts-v1/; /dts-v1/; / { };"#;
+
+        let exp = Dts {
+            version: DtsVersion::V1,
+            nodes: vec![Node {
+                name: NodeName::Extended {
+                    name: "/".to_string(),
+                    labels: vec![],
+                    address: None,
+                },
+                contents: Default::default(),
+            }],
+            includes: vec![],
+        };
+
+        match dts_file::<VerboseError<&str>>(input).finish() {
+            Ok(res) => assert_eq!(res, ("", exp)),
+            Err(e) => panic!("{}", convert_error(input, e)),
         }
     }
 
