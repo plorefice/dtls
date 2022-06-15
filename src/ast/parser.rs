@@ -5,12 +5,12 @@ use nom::{
     branch::alt,
     bytes::complete::{is_a, is_not, tag, take_while_m_n},
     character::complete::{
-        alphanumeric1, anychar, char, hex_digit1, i64, line_ending, multispace1, space1,
+        alphanumeric1, anychar, char, hex_digit1, i64, line_ending, multispace1, space1, u64,
     },
     combinator::{cut, map, opt, recognize},
     error::{convert_error, ParseError, VerboseError},
     multi::{many0, many1, many_m_n, many_till, separated_list1},
-    sequence::{delimited, preceded, terminated, tuple},
+    sequence::{delimited, pair, preceded, terminated, tuple},
     Finish, IResult,
 };
 
@@ -40,6 +40,7 @@ where
         Include(String),
         VersionDirective,
         DeletedNodeDirective(NodeId),
+        MemreserveDirective((u64, u64)),
     }
 
     let root_node = map(root_node, TopLevelContents::Node);
@@ -49,6 +50,7 @@ where
         TopLevelContents::Include(s.to_string())
     });
     let deleted_node_directive = map(deleted_node, TopLevelContents::DeletedNodeDirective);
+    let memreserve_directive = map(memreserve, TopLevelContents::MemreserveDirective);
 
     map(
         many0(alt((
@@ -57,6 +59,7 @@ where
             version_directive,
             include_directive,
             deleted_node_directive,
+            memreserve_directive,
         ))),
         move |contents| {
             let mut dts = Dts::default();
@@ -67,6 +70,7 @@ where
                     TopLevelContents::Include(inc) => dts.includes.push(inc),
                     TopLevelContents::VersionDirective => dts.version = DtsVersion::V1,
                     TopLevelContents::DeletedNodeDirective(n) => dts.deleted_nodes.push(n),
+                    TopLevelContents::MemreserveDirective(m) => dts.memreserves.push(m),
                 }
             }
 
@@ -346,12 +350,10 @@ fn deleted_node<'a, E>(input: &'a str) -> IResult<&'a str, NodeId, E>
 where
     E: ParseError<&'a str>,
 {
-    preceded(
+    delimited(
         delete_node_keyword,
-        cut(terminated(
-            alt((node_name, map(node_reference, NodeId::Ref))),
-            terminator,
-        )),
+        cut(alt((node_name, map(node_reference, NodeId::Ref)))),
+        cut(terminator),
     )(input)
 }
 
@@ -360,9 +362,18 @@ fn deleted_property<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    preceded(
-        delete_property_keyword,
-        cut(terminated(prop_name, terminator)),
+    delimited(delete_property_keyword, cut(prop_name), cut(terminator))(input)
+}
+
+/// Parse a valid memreserve directive.
+fn memreserve<'a, E>(input: &'a str) -> IResult<&'a str, (u64, u64), E>
+where
+    E: ParseError<&'a str>,
+{
+    delimited(
+        memreserve_keyword,
+        cut(pair(unsigned_literal, unsigned_literal)),
+        cut(terminator),
     )(input)
 }
 
@@ -477,7 +488,15 @@ where
     )(input)
 }
 
-/// Parse a valid number in any base.
+/// Parse a valid unsigned integer number in any base.
+fn unsigned_literal<'a, E>(input: &'a str) -> IResult<&'a str, u64, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(alt((unsigned_hex, unsigned_dec)))(input)
+}
+
+/// Parse a valid signed integer number in any base.
 fn numeric_literal<'a, E>(input: &'a str) -> IResult<&'a str, i64, E>
 where
     E: ParseError<&'a str>,
@@ -639,22 +658,38 @@ where
     )))(input)
 }
 
-/// Parse an integer number in base 16, prefixed by `0x`.
+/// Parse a signed integer number in base 16, prefixed by `0x`.
 fn hex<'a, E>(input: &'a str) -> IResult<&'a str, i64, E>
 where
     E: ParseError<&'a str>,
 {
+    map(unsigned_hex, |d| d as i64)(input)
+}
+
+/// Parse an usigned integer number in base 16, prefixed by `0x`.
+fn unsigned_hex<'a, E>(input: &'a str) -> IResult<&'a str, u64, E>
+where
+    E: ParseError<&'a str>,
+{
     map(preceded(tag("0x"), cut(hex_digit1)), |s: &str| {
-        i64::from_str_radix(s, 16).unwrap()
+        u64::from_str_radix(s, 16).unwrap()
     })(input)
 }
 
-/// Parse an integer number in base 10.
+/// Parse a signed integer number in base 10.
 fn dec<'a, E>(input: &'a str) -> IResult<&'a str, i64, E>
 where
     E: ParseError<&'a str>,
 {
     i64(input)
+}
+
+/// Parse an unsigned integer number in base 10.
+fn unsigned_dec<'a, E>(input: &'a str) -> IResult<&'a str, u64, E>
+where
+    E: ParseError<&'a str>,
+{
+    u64(input)
 }
 
 /// Parse a byte represented by two hex digits.
@@ -725,6 +760,14 @@ where
     E: ParseError<&'a str>,
 {
     lexeme(tag("/bits/"))(input)
+}
+
+/// Recognize the `/memreserve/` keyword.
+fn memreserve_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(tag("/memreserve/"))(input)
 }
 
 /// Recognize the `/delete-node/` keyword.
@@ -1198,6 +1241,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_memreserve_directives() {
+        for (input, exp) in [
+            ("/memreserve/ 0x0 0x1000;", Some((0x0, 0x1000))),
+            ("/memreserve/ 0x1000 0x2000;", Some((0x1000, 0x2000))),
+            ("/memreserve/ 0 65536;", Some((0, 65536))),
+            ("/memreserve/ 0x1000;", None),
+            ("/memreserve/ 0 0x1000", None),
+            ("/memreserve/;", None),
+            ("/memreserve/", None),
+        ] {
+            match memreserve::<VerboseError<&str>>(input).finish() {
+                Ok(res) => assert_eq!(res, ("", exp.unwrap())),
+                Err(_) => assert!(exp.is_none()),
+            }
+        }
+    }
+
+    #[test]
     fn parse_multiple_version_directives() {
         let input = r#"/dts-v1/; /dts-v1/; / { };"#;
 
@@ -1221,6 +1282,8 @@ mod tests {
     fn parse_simple_file() {
         let input = r#"
 /dts-v1/;
+
+/memreserve/ 0x00000000 0x00400000;
 
 / {
     compatible = "acme,coyotes-revenge";

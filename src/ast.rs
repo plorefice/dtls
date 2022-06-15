@@ -8,6 +8,7 @@ pub struct Dts {
     includes: Vec<String>,
     nodes: Vec<Node>,
     deleted_nodes: Vec<NodeId>,
+    memreserves: Vec<(u64, u64)>,
 }
 
 impl Default for Dts {
@@ -17,6 +18,7 @@ impl Default for Dts {
             includes: Vec::new(),
             nodes: Vec::new(),
             deleted_nodes: Vec::new(),
+            memreserves: Vec::new(),
         }
     }
 }
