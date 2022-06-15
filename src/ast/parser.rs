@@ -146,7 +146,7 @@ fn root_node_name<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(char('/'))(input)
+    path_separator(input)
 }
 
 /// Parse the body of a device tree node.
@@ -154,7 +154,7 @@ fn node_body<'a, E>(input: &'a str) -> IResult<&'a str, NodeContents, E>
 where
     E: ParseError<&'a str>,
 {
-    preceded(block_start, cut(terminated(node_contents, block_end)))(input)
+    preceded(braces_start, cut(terminated(node_contents, braces_end)))(input)
 }
 
 /// Parse a list of node labels.
@@ -382,9 +382,12 @@ fn node_reference<'a, E>(input: &'a str) -> IResult<&'a str, Reference, E>
 where
     E: ParseError<&'a str>,
 {
-    map(preceded(reference_operator, cut(node_label_str)), |s| {
+    let node_label = map(node_label_str, |s| Reference(s.to_string()));
+    let node_path = map(delimited(braces_start, node_path, braces_end), |s| {
         Reference(s.to_string())
-    })(input)
+    });
+
+    preceded(reference_operator, cut(alt((node_label, node_path))))(input)
 }
 
 /// Parse a valid node name.
@@ -565,16 +568,16 @@ where
     lexeme(char(':'))(input)
 }
 
-/// Recognize the start of a block.
-fn block_start<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+/// Recognize the start of a brace.
+fn braces_start<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
 where
     E: ParseError<&'a str>,
 {
     lexeme(char('{'))(input)
 }
 
-/// Recognize the end of a block.
-fn block_end<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+/// Recognize the end of a brace.
+fn braces_end<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
 where
     E: ParseError<&'a str>,
 {
@@ -635,6 +638,14 @@ where
     E: ParseError<&'a str>,
 {
     lexeme(char('&'))(input)
+}
+
+/// Recognize a path separator.
+fn path_separator<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('/'))(input)
 }
 
 /// Recognize an arithmetic unary operator.
@@ -725,7 +736,7 @@ fn include_path_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    recognize(separated_list1(char('/'), is_not("/\0\"<>")))(input)
+    recognize(separated_list1(path_separator, is_not("/\0\"<>")))(input)
 }
 
 /// Recognize a valid node name string.
@@ -742,6 +753,17 @@ where
     E: ParseError<&'a str>,
 {
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a("_")))))(input)
+}
+
+/// Recognize a valid node path.
+fn node_path<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    recognize(preceded(
+        path_separator,
+        separated_list1(path_separator, node_name),
+    ))(input)
 }
 
 /// Recognize a valid property name string.
@@ -1005,6 +1027,15 @@ mod tests {
                 Property {
                     name: String::from("serial0"),
                     value: Some(vec![PropertyValue::Ref(Reference("usart3".to_string()))]),
+                },
+            ),
+            (
+                r#"cpu = <&{/cpus/cpu@0}>;"#,
+                Property {
+                    name: String::from("cpu"),
+                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference(
+                        "/cpus/cpu@0".to_string(),
+                    ))])]),
                 },
             ),
             (
