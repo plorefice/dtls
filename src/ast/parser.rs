@@ -511,7 +511,7 @@ where
 {
     preceded(
         include_keyword,
-        cut(delimited(char('"'), include_path_str, char('"'))),
+        cut(delimited(quote, include_path_str, quote)),
     )(input)
 }
 
@@ -520,13 +520,18 @@ fn string_literal<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(preceded(
-        char('"'),
-        cut(terminated(printable_ascii, char('"'))),
-    ))(input)
+    preceded(quote, cut(terminated(printable_ascii, quote)))(input)
 }
 
 /* === Low-level syntax parsers === */
+
+/// Recognize a double-quote character.
+fn quote<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('"'))(input)
+}
 
 /// Recognize an assigment operator.
 fn assignment<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
