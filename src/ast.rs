@@ -8,6 +8,7 @@ pub struct Dts {
     includes: Vec<String>,
     nodes: Vec<Node>,
     deleted_nodes: Vec<NodeId>,
+    omitted_nodes: Vec<NodeId>,
     memreserves: Vec<(u64, u64)>,
 }
 
@@ -18,6 +19,7 @@ impl Default for Dts {
             includes: Vec::new(),
             nodes: Vec::new(),
             deleted_nodes: Vec::new(),
+            omitted_nodes: Vec::new(),
             memreserves: Vec::new(),
         }
     }
@@ -34,6 +36,18 @@ pub struct Node {
     id: NodeId,
     labels: Vec<String>,
     contents: NodeContents,
+    omit_if_no_ref: bool,
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self {
+            id: NodeId::Name(String::new(), None),
+            labels: Default::default(),
+            contents: Default::default(),
+            omit_if_no_ref: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

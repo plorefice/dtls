@@ -41,6 +41,7 @@ where
         Include(String),
         VersionDirective,
         DeletedNodeDirective(NodeId),
+        OmitIfNoRefDirective(NodeId),
         MemreserveDirective((u64, u64)),
     }
 
@@ -51,6 +52,7 @@ where
         TopLevelContents::Include(s.to_string())
     });
     let deleted_node_directive = map(deleted_node, TopLevelContents::DeletedNodeDirective);
+    let omit_if_no_ref_directive = map(omit_if_no_ref, TopLevelContents::OmitIfNoRefDirective);
     let memreserve_directive = map(memreserve, TopLevelContents::MemreserveDirective);
 
     map(
@@ -60,6 +62,7 @@ where
             version_directive,
             include_directive,
             deleted_node_directive,
+            omit_if_no_ref_directive,
             memreserve_directive,
         ))),
         move |contents| {
@@ -71,6 +74,7 @@ where
                     TopLevelContents::Include(inc) => dts.includes.push(inc),
                     TopLevelContents::VersionDirective => dts.version = DtsVersion::V1,
                     TopLevelContents::DeletedNodeDirective(n) => dts.deleted_nodes.push(n),
+                    TopLevelContents::OmitIfNoRefDirective(n) => dts.omitted_nodes.push(n),
                     TopLevelContents::MemreserveDirective(m) => dts.memreserves.push(m),
                 }
             }
@@ -101,8 +105,8 @@ where
         tuple((root_node_name, node_body, cut(terminator))),
         |(name, contents, _)| Node {
             id: NodeId::Name(name.to_string(), None),
-            labels: vec![],
             contents,
+            ..Default::default()
         },
     )(input)
 }
@@ -116,11 +120,18 @@ where
     E: ParseError<&'a str>,
 {
     map(
-        tuple((node_labels, node_reference, node_body, cut(terminator))),
-        |(labels, reference, contents, _)| Node {
+        tuple((
+            opt(omit_if_no_ref_keyword),
+            node_labels,
+            node_reference,
+            node_body,
+            cut(terminator),
+        )),
+        |(omit, labels, reference, contents, _)| Node {
             id: NodeId::Ref(reference),
             labels,
             contents,
+            omit_if_no_ref: omit.is_some(),
         },
     )(input)
 }
@@ -133,11 +144,18 @@ where
     E: ParseError<&'a str>,
 {
     map(
-        tuple((node_labels, node_name, node_body, cut(terminator))),
-        |(labels, name, contents, _)| Node {
+        tuple((
+            opt(omit_if_no_ref_keyword),
+            node_labels,
+            node_name,
+            node_body,
+            cut(terminator),
+        )),
+        |(omit, labels, name, contents, _)| Node {
             id: name,
             labels,
             contents,
+            omit_if_no_ref: omit.is_some(),
         },
     )(input)
 }
@@ -374,6 +392,18 @@ where
     delimited(
         memreserve_keyword,
         cut(pair(unsigned_literal, unsigned_literal)),
+        cut(terminator),
+    )(input)
+}
+
+/// Parse a valid omitted node directive.
+fn omit_if_no_ref<'a, E>(input: &'a str) -> IResult<&'a str, NodeId, E>
+where
+    E: ParseError<&'a str>,
+{
+    delimited(
+        omit_if_no_ref_keyword,
+        cut(alt((node_name, map(node_reference, NodeId::Ref)))),
         cut(terminator),
     )(input)
 }
@@ -837,6 +867,14 @@ where
     lexeme(tag("/delete-property/"))(input)
 }
 
+/// Recognize the `/omit-if-no-ref/` keyword.
+fn omit_if_no_ref_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(tag("/omit-if-no-ref/"))(input)
+}
+
 /// Recognize the `/dts-v1/` keyword.
 fn dts_v1_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
@@ -1102,7 +1140,6 @@ mod tests {
 
         let exp = Node {
             id: NodeId::Name("/".to_string(), None),
-            labels: vec![],
             contents: NodeContents {
                 props: vec![
                     Property {
@@ -1116,6 +1153,7 @@ mod tests {
                 ],
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         match root_node::<VerboseError<&str>>(input).finish() {
@@ -1162,7 +1200,6 @@ mod tests {
 
         let exp = Node {
             id: NodeId::Name("cpus".to_string(), None),
-            labels: vec![],
             contents: NodeContents {
                 props: vec![
                     Property {
@@ -1177,7 +1214,6 @@ mod tests {
                 children: vec![
                     Node {
                         id: NodeId::Name("cpu".to_string(), Some("0".to_string())),
-                        labels: vec![],
                         contents: NodeContents {
                             props: vec![
                                 Property {
@@ -1221,13 +1257,14 @@ mod tests {
                                     }],
                                     ..Default::default()
                                 },
+                                ..Default::default()
                             }],
                             ..Default::default()
                         },
+                        ..Default::default()
                     },
                     Node {
                         id: NodeId::Name("cpu".to_string(), Some("1".to_string())),
-                        labels: vec![],
                         contents: NodeContents {
                             props: vec![
                                 Property {
@@ -1249,13 +1286,16 @@ mod tests {
                                     }],
                                     ..Default::default()
                                 },
+                                ..Default::default()
                             }],
                             ..Default::default()
                         },
+                        ..Default::default()
                     },
                 ],
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         match inner_node::<VerboseError<&str>>(input).finish() {
@@ -1336,6 +1376,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_omit_if_no_ref_directives() {
+        for (input, exp) in [
+            (
+                "/omit-if-no-ref/ foo;",
+                Some(NodeId::Name("foo".to_string(), None)),
+            ),
+            (
+                "/omit-if-no-ref/ bar@0,0;",
+                Some(NodeId::Name("bar".to_string(), Some("0,0".to_string()))),
+            ),
+            (
+                "/omit-if-no-ref/ &baz;",
+                Some(NodeId::Ref(Reference("baz".to_string()))),
+            ),
+        ] {
+            match omit_if_no_ref::<VerboseError<&str>>(input).finish() {
+                Ok(res) => assert_eq!(res, ("", exp.unwrap())),
+                Err(_) => assert!(exp.is_none()),
+            }
+        }
+    }
+
+    #[test]
     fn parse_multiple_version_directives() {
         let input = r#"/dts-v1/; /dts-v1/; / { };"#;
 
@@ -1343,8 +1406,7 @@ mod tests {
             version: DtsVersion::V1,
             nodes: vec![Node {
                 id: NodeId::Name("/".to_string(), None),
-                labels: vec![],
-                contents: Default::default(),
+                ..Default::default()
             }],
             ..Default::default()
         };
