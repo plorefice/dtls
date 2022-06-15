@@ -435,7 +435,7 @@ fn integer_expr_lit<'a, E>(input: &'a str) -> IResult<&'a str, IntegerExpression
 where
     E: ParseError<&'a str>,
 {
-    map(numeric_literal, IntegerExpression::Lit)(input)
+    map(integer_literal, IntegerExpression::Lit)(input)
 }
 
 /// Parse a valid parenthesized integer expression in a property cell.
@@ -491,6 +491,16 @@ where
     )(input)
 }
 
+fn integer_literal<'a, E>(input: &'a str) -> IResult<&'a str, IntegerLiteral, E>
+where
+    E: ParseError<&'a str>,
+{
+    alt((
+        map(numeric_literal, IntegerLiteral::Num),
+        map(char_literal, IntegerLiteral::Char),
+    ))(input)
+}
+
 /// Parse a valid unsigned integer number in any base.
 fn unsigned_literal<'a, E>(input: &'a str) -> IResult<&'a str, u64, E>
 where
@@ -507,6 +517,14 @@ where
     lexeme(alt((hex, dec)))(input)
 }
 
+/// Parse a valid character literal.
+fn char_literal<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    delimited(char('\''), cut(anychar), cut(char('\'')))(input)
+}
+
 /// Parse a valid include directive.
 fn include_directive<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
@@ -514,7 +532,7 @@ where
 {
     preceded(
         include_keyword,
-        cut(delimited(quote, include_path_str, quote)),
+        cut(delimited(double_quote, include_path_str, double_quote)),
     )(input)
 }
 
@@ -523,13 +541,13 @@ fn string_literal<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    preceded(quote, cut(terminated(printable_ascii, quote)))(input)
+    preceded(double_quote, cut(terminated(printable_ascii, double_quote)))(input)
 }
 
 /* === Low-level syntax parsers === */
 
 /// Recognize a double-quote character.
-fn quote<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+fn double_quote<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
 where
     E: ParseError<&'a str>,
 {
@@ -950,6 +968,7 @@ mod tests {
     #[test]
     fn parse_properties() {
         use IntegerExpression::*;
+        use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;
 
@@ -978,8 +997,8 @@ mod tests {
                     value: Some(vec![
                         CellArray(vec![
                             PropertyCell::Ref(Reference("mpic".to_string())),
-                            Expr(Lit(0xf00f_0000)),
-                            Expr(Lit(19)),
+                            Expr(Lit(Num(0xf00f_0000))),
+                            Expr(Lit(Num(19))),
                         ]),
                         Str(String::from("a strange property format")),
                     ]),
@@ -989,7 +1008,7 @@ mod tests {
                 r#"reg = <0>;"#,
                 Property {
                     name: String::from("reg"),
-                    value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                 },
             ),
             (
@@ -1003,7 +1022,7 @@ mod tests {
                 r#"cache-size = <0x8000>;"#,
                 Property {
                     name: String::from("cache-size"),
-                    value: Some(vec![CellArray(vec![Expr(Lit(0x8000))])]),
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0x8000)))])]),
                 },
             ),
             (
@@ -1016,10 +1035,14 @@ mod tests {
                 },
             ),
             (
-                r#"interrupts = <17 0xc>;"#,
+                r#"interrupts = <17 0xc 'A'>;"#,
                 Property {
                     name: String::from("interrupts"),
-                    value: Some(vec![CellArray(vec![Expr(Lit(17)), Expr(Lit(0xc))])]),
+                    value: Some(vec![CellArray(vec![
+                        Expr(Lit(Num(17))),
+                        Expr(Lit(Num(0xc))),
+                        Expr(Lit(Char('A'))),
+                    ])]),
                 },
             ),
             (
@@ -1056,6 +1079,7 @@ mod tests {
     #[test]
     fn parse_root_node() {
         use IntegerExpression::*;
+        use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;
 
@@ -1068,11 +1092,11 @@ mod tests {
                 props: vec![
                     Property {
                         name: String::from("#address-cells"),
-                        value: Some(vec![CellArray(vec![Expr(Lit(2))])]),
+                        value: Some(vec![CellArray(vec![Expr(Lit(Num(2)))])]),
                     },
                     Property {
                         name: String::from("#size-cells"),
-                        value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
+                        value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                     },
                 ],
                 ..Default::default()
@@ -1088,6 +1112,7 @@ mod tests {
     #[test]
     fn parse_inner_node() {
         use IntegerExpression::*;
+        use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;
 
@@ -1127,11 +1152,11 @@ mod tests {
                 props: vec![
                     Property {
                         name: String::from("#address-cells"),
-                        value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
+                        value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                     },
                     Property {
                         name: String::from("#size-cells"),
-                        value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
+                        value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                     },
                 ],
                 children: vec![
@@ -1146,7 +1171,7 @@ mod tests {
                                 },
                                 Property {
                                     name: String::from("reg"),
-                                    value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                                 },
                                 Property {
                                     name: String::from("cache-unified"),
@@ -1154,15 +1179,15 @@ mod tests {
                                 },
                                 Property {
                                     name: String::from("cache-size"),
-                                    value: Some(vec![CellArray(vec![Expr(Lit(0x8000))])]),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0x8000)))])]),
                                 },
                                 Property {
                                     name: String::from("cache-block-size"),
-                                    value: Some(vec![CellArray(vec![Expr(Lit(32))])]),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(32)))])]),
                                 },
                                 Property {
                                     name: String::from("timebase-frequency"),
-                                    value: Some(vec![CellArray(vec![Expr(Lit(82_500_000))])]),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(82_500_000)))])]),
                                 },
                                 Property {
                                     name: String::from("next-level-cache"),
@@ -1196,7 +1221,7 @@ mod tests {
                                 },
                                 Property {
                                     name: String::from("reg"),
-                                    value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                                 },
                             ],
                             children: vec![Node {

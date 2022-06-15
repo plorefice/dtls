@@ -77,13 +77,19 @@ pub enum PropertyCell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegerExpression {
-    Lit(i64),
+    Lit(IntegerLiteral),
     Unary(UnaryOperator, Box<IntegerExpression>),
     Binary(
         Box<IntegerExpression>,
         BinaryOperator,
         Box<IntegerExpression>,
     ),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegerLiteral {
+    Num(i64),
+    Char(char),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
