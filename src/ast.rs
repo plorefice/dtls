@@ -15,23 +15,36 @@ pub enum DtsVersion {
     V1,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
-    name: String,
-    labels: Vec<String>,
-    address: Option<String>,
+    name: NodeName,
+    contents: NodeContents,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeName {
+    Ref(String),
+    Extended {
+        name: String,
+        labels: Vec<String>,
+        address: Option<String>,
+    },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct NodeContents {
     props: Vec<Property>,
     children: Vec<Node>,
     includes: Vec<String>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
     name: String,
     value: Option<Vec<PropertyValue>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropertyValue {
     Str(String),
     Alias(String),
@@ -40,7 +53,7 @@ pub enum PropertyValue {
     Bits(u32, Vec<IntegerExpression>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropertyCell {
     Ref(String),
     Expr(IntegerExpression),

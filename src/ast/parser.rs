@@ -10,7 +10,7 @@ use nom::{
     combinator::{cut, map, opt, recognize},
     error::{convert_error, ParseError, VerboseError},
     multi::{many0, many1, many_m_n, many_till, separated_list1},
-    sequence::{delimited, pair, preceded, terminated, tuple},
+    sequence::{delimited, preceded, terminated, tuple},
     Finish, IResult,
 };
 
@@ -22,7 +22,8 @@ pub fn from_reader(mut r: impl Read) -> Result<Dts> {
     r.read_to_string(&mut dts)?;
 
     let dts = match dts_file::<VerboseError<&str>>(&dts).finish() {
-        Ok((_, dts)) => dts,
+        Ok(("", dts)) => dts,
+        Ok((rest, _)) => bail!("unexpected trailing characters: {}", rest),
         Err(e) => bail!("{}", convert_error(dts.as_str(), e)),
     };
 
@@ -34,37 +35,41 @@ fn dts_file<'a, E>(input: &'a str) -> IResult<&'a str, Dts, E>
 where
     E: ParseError<&'a str>,
 {
-    enum FileContent {
+    enum TopLevelContents {
         Include(String),
         Node(Node),
     }
 
     let (input, version) = version_directive(input)?;
 
+    let root_node = map(root_node, TopLevelContents::Node);
+    let node_override = map(node_override, TopLevelContents::Node);
+    let include_directive = map(include_directive, |s| {
+        TopLevelContents::Include(s.to_string())
+    });
+
     map(
-        many0(alt((
-            map(include_directive, |s| FileContent::Include(s.to_string())),
-            map(node, FileContent::Node),
-        ))),
+        many0(alt((root_node, node_override, include_directive))),
         move |contents| {
-            contents.into_iter().fold(
-                Dts {
-                    version,
-                    includes: vec![],
-                    nodes: vec![],
-                },
-                |mut dts, elem| {
-                    match elem {
-                        FileContent::Include(i) => dts.includes.push(i),
-                        FileContent::Node(n) => dts.nodes.push(n),
-                    };
-                    dts
-                },
-            )
+            let mut dts = Dts {
+                version,
+                includes: vec![],
+                nodes: vec![],
+            };
+
+            for content in contents {
+                match content {
+                    TopLevelContents::Include(inc) => dts.includes.push(inc),
+                    TopLevelContents::Node(node) => dts.nodes.push(node),
+                }
+            }
+
+            dts
         },
     )(input)
 }
 
+/// Parse a version directive.
 fn version_directive<'a, E>(input: &'a str) -> IResult<&'a str, DtsVersion, E>
 where
     E: ParseError<&'a str>,
@@ -81,25 +86,80 @@ where
     )(input)
 }
 
-/// Parse a device tree node.
-fn node<'a, E>(input: &'a str) -> IResult<&'a str, Node, E>
+/// Parse a valid root node.
+///
+/// The root node is a top-level named node in the file and its name should always be '/'.
+fn root_node<'a, E>(input: &'a str) -> IResult<&'a str, Node, E>
 where
     E: ParseError<&'a str>,
 {
-    let labels = many0(terminated(node_label, label_separator));
-    let contents = preceded(block_start, cut(terminated(node_contents, block_end)));
-
     map(
-        tuple((labels, node_name, contents, cut(terminator))),
-        |(labels, (name, address), (props, children, includes), _)| Node {
-            name: name.to_string(),
-            address: address.map(|address| address.to_string()),
-            labels: labels.into_iter().map(|label| label.to_string()).collect(),
-            props,
-            children,
-            includes,
+        tuple((root_node_name, node_body, cut(terminator))),
+        |(name, contents, _)| Node {
+            name: NodeName::Extended {
+                name: name.to_string(),
+                labels: vec![],
+                address: None,
+            },
+            contents,
         },
     )(input)
+}
+
+/// Parse a valid node override.
+///
+/// Node overrides are only valid in the top-level of the file and their name should be
+/// a valid node reference.
+fn node_override<'a, E>(input: &'a str) -> IResult<&'a str, Node, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(
+        tuple((node_reference, node_body, cut(terminator))),
+        |(name, contents, _)| Node {
+            name: NodeName::Ref(name.to_string()),
+            contents,
+        },
+    )(input)
+}
+
+/// Parse a valid inner node.
+///
+/// Inner nodes are only valid within the body of a node. Their name should be a valid node name.
+fn inner_node<'a, E>(input: &'a str) -> IResult<&'a str, Node, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(
+        tuple((node_name, node_body, cut(terminator))),
+        |(name, contents, _)| Node { name, contents },
+    )(input)
+}
+
+/// Recognize the name of a root node.
+fn root_node_name<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('/'))(input)
+}
+
+/// Parse the body of a device tree node.
+fn node_body<'a, E>(input: &'a str) -> IResult<&'a str, NodeContents, E>
+where
+    E: ParseError<&'a str>,
+{
+    preceded(block_start, cut(terminated(node_contents, block_end)))(input)
+}
+
+/// Parse a list of node labels.
+fn node_labels<'a, E>(input: &'a str) -> IResult<&'a str, Vec<String>, E>
+where
+    E: ParseError<&'a str>,
+{
+    map(many0(terminated(node_label, label_separator)), |v| {
+        v.into_iter().map(String::from).collect()
+    })(input)
 }
 
 /// Parse a node label.
@@ -111,16 +171,13 @@ where
 }
 
 /// Parse the contents of a node.
-#[allow(clippy::type_complexity)]
-fn node_contents<'a, E>(
-    input: &'a str,
-) -> IResult<&'a str, (Vec<Property>, Vec<Node>, Vec<String>), E>
+fn node_contents<'a, E>(input: &'a str) -> IResult<&'a str, NodeContents, E>
 where
     E: ParseError<&'a str>,
 {
     enum NodeContent {
-        Prop(Property),
         Node(Node),
+        Prop(Property),
         Include(String),
     }
 
@@ -129,22 +186,21 @@ where
     // and split them later in the closure.
     map(
         many0(alt((
-            map(node, NodeContent::Node),
+            map(inner_node, NodeContent::Node),
             map(property, NodeContent::Prop),
             map(include_directive, |s| NodeContent::Include(s.to_string())),
         ))),
         |contents| {
-            contents.into_iter().fold(
-                (vec![], vec![], vec![]),
-                |(mut props, mut nodes, mut includes), elem| {
+            contents
+                .into_iter()
+                .fold(NodeContents::default(), |mut contents, elem| {
                     match elem {
-                        NodeContent::Prop(p) => props.push(p),
-                        NodeContent::Node(c) => nodes.push(c),
-                        NodeContent::Include(c) => includes.push(c),
+                        NodeContent::Prop(p) => contents.props.push(p),
+                        NodeContent::Node(c) => contents.children.push(c),
+                        NodeContent::Include(c) => contents.includes.push(c),
                     };
-                    (props, nodes, includes)
-                },
-            )
+                    contents
+                })
         },
     )(input)
 }
@@ -284,13 +340,24 @@ where
 
 /// Parse a valid node name.
 ///
-/// A node name has composed of a node-name part and an optional node-address in hex format.
-#[allow(clippy::type_complexity)]
-fn node_name<'a, E>(input: &'a str) -> IResult<&'a str, (&'a str, Option<&'a str>), E>
+/// A node name has composed of an optional number of labels, a node-name part
+/// and an optional node-address in hex format.
+fn node_name<'a, E>(input: &'a str) -> IResult<&'a str, NodeName, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(pair(node_name_identifier, opt(node_address_identifier)))(input)
+    map(
+        tuple((
+            node_labels,
+            node_name_identifier,
+            opt(node_address_identifier),
+        )),
+        |(labels, name, address)| NodeName::Extended {
+            name: name.to_string(),
+            labels,
+            address: address.map(String::from),
+        },
+    )(input)
 }
 
 /// Parse a valid node name identifier, i.e. the part of the node name before the unit-address.
@@ -298,7 +365,7 @@ fn node_name_identifier<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    alt((tag("/"), node_name_str))(input)
+    lexeme(node_name_str)(input)
 }
 
 /// Parse a valid node unit-address identifier.
@@ -692,22 +759,66 @@ mod tests {
 
     #[test]
     fn parse_node_names() {
-        for (input, (name, address)) in [
-            ("/", ("/", None)),
-            ("cpus", ("cpus", None)),
-            ("cpu@0", ("cpu", Some("0"))),
-            ("cpu@1", ("cpu", Some("1"))),
-            ("l2-cache", ("l2-cache", None)),
-            ("l3-cache", ("l3-cache", None)),
-            ("open-pic", ("open-pic", None)),
-            ("soc_gpio1", ("soc_gpio1", None)),
-            ("memory@0", ("memory", Some("0"))),
-            ("uart@fe001000", ("uart", Some("fe001000"))),
-            ("ethernet@fe002000", ("ethernet", Some("fe002000"))),
-            ("ethernet@fe003000", ("ethernet", Some("fe003000"))),
+        for (input, exp) in [
+            (
+                "cpus",
+                NodeName::Extended {
+                    name: "cpus".to_string(),
+                    labels: vec![],
+                    address: None,
+                },
+            ),
+            (
+                "cpu@0",
+                NodeName::Extended {
+                    name: "cpu".to_string(),
+                    labels: vec![],
+                    address: Some("0".to_string()),
+                },
+            ),
+            (
+                "l2-cache",
+                NodeName::Extended {
+                    name: "l2-cache".to_string(),
+                    labels: vec![],
+                    address: None,
+                },
+            ),
+            (
+                "open-pic",
+                NodeName::Extended {
+                    name: "open-pic".to_string(),
+                    labels: vec![],
+                    address: None,
+                },
+            ),
+            (
+                "soc_gpio1",
+                NodeName::Extended {
+                    name: "soc_gpio1".to_string(),
+                    labels: vec![],
+                    address: None,
+                },
+            ),
+            (
+                "memory@0",
+                NodeName::Extended {
+                    name: "memory".to_string(),
+                    labels: vec![],
+                    address: Some("0".to_string()),
+                },
+            ),
+            (
+                "uart@fe001000",
+                NodeName::Extended {
+                    name: "uart".to_string(),
+                    labels: vec![],
+                    address: Some("fe001000".to_string()),
+                },
+            ),
         ] {
             match node_name::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", (name, address))),
+                Ok(res) => assert_eq!(res, ("", exp)),
                 Err(e) => panic!("{}", convert_error(input, e),),
             }
         }
@@ -833,7 +944,43 @@ mod tests {
     }
 
     #[test]
-    fn parse_nodes() {
+    fn parse_root_node() {
+        use IntegerExpression::*;
+        use PropertyCell::*;
+        use PropertyValue::*;
+
+        let input = r#"/ { #address-cells = <2>; #size-cells = <1>; };"#;
+
+        let exp = Node {
+            name: NodeName::Extended {
+                name: "/".to_string(),
+                labels: vec![],
+                address: None,
+            },
+            contents: NodeContents {
+                props: vec![
+                    Property {
+                        name: String::from("#address-cells"),
+                        value: Some(vec![CellArray(vec![Expr(Lit(2))])]),
+                    },
+                    Property {
+                        name: String::from("#size-cells"),
+                        value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
+                    },
+                ],
+                children: vec![],
+                includes: vec![],
+            },
+        };
+
+        match root_node::<VerboseError<&str>>(input).finish() {
+            Ok(res) => assert_eq!(res, ("", exp)),
+            Err(e) => panic!("{}", convert_error(input, e)),
+        }
+    }
+
+    #[test]
+    fn parse_inner_node() {
         use IntegerExpression::*;
         use PropertyCell::*;
         use PropertyValue::*;
@@ -868,99 +1015,119 @@ mod tests {
 "#;
 
         let exp = Node {
-            name: String::from("cpus"),
-            address: None,
-            labels: vec![],
-            props: vec![
-                Property {
-                    name: String::from("#address-cells"),
-                    value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
-                },
-                Property {
-                    name: String::from("#size-cells"),
-                    value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
-                },
-            ],
-            children: vec![
-                Node {
-                    name: String::from("cpu"),
-                    address: Some(String::from("0")),
-                    labels: vec![],
-                    props: vec![
-                        Property {
-                            name: String::from("device_type"),
-                            value: Some(vec![Str(String::from("cpu"))]),
+            name: NodeName::Extended {
+                name: "cpus".to_string(),
+                labels: vec![],
+                address: None,
+            },
+            contents: NodeContents {
+                props: vec![
+                    Property {
+                        name: String::from("#address-cells"),
+                        value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
+                    },
+                    Property {
+                        name: String::from("#size-cells"),
+                        value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
+                    },
+                ],
+                children: vec![
+                    Node {
+                        name: NodeName::Extended {
+                            name: "cpu".to_string(),
+                            labels: vec![],
+                            address: Some("0".to_string()),
                         },
-                        Property {
-                            name: String::from("reg"),
-                            value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
+                        contents: NodeContents {
+                            props: vec![
+                                Property {
+                                    name: String::from("device_type"),
+                                    value: Some(vec![Str(String::from("cpu"))]),
+                                },
+                                Property {
+                                    name: String::from("reg"),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(0))])]),
+                                },
+                                Property {
+                                    name: String::from("cache-unified"),
+                                    value: None,
+                                },
+                                Property {
+                                    name: String::from("cache-size"),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(0x8000))])]),
+                                },
+                                Property {
+                                    name: String::from("cache-block-size"),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(32))])]),
+                                },
+                                Property {
+                                    name: String::from("timebase-frequency"),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(82_500_000))])]),
+                                },
+                                Property {
+                                    name: String::from("next-level-cache"),
+                                    value: Some(vec![CellArray(vec![Ref(String::from("L2_0"))])]),
+                                },
+                            ],
+                            children: vec![Node {
+                                name: NodeName::Extended {
+                                    name: "l2-cache".to_string(),
+                                    labels: vec!["L2_0".to_string()],
+                                    address: None,
+                                },
+                                contents: NodeContents {
+                                    props: vec![Property {
+                                        name: String::from("compatible"),
+                                        value: Some(vec![Str(String::from("cache"))]),
+                                    }],
+                                    children: vec![],
+                                    includes: vec![],
+                                },
+                            }],
+                            includes: vec![],
                         },
-                        Property {
-                            name: String::from("cache-unified"),
-                            value: None,
+                    },
+                    Node {
+                        name: NodeName::Extended {
+                            name: "cpu".to_string(),
+                            labels: vec![],
+                            address: Some("1".to_string()),
                         },
-                        Property {
-                            name: String::from("cache-size"),
-                            value: Some(vec![CellArray(vec![Expr(Lit(0x8000))])]),
+                        contents: NodeContents {
+                            props: vec![
+                                Property {
+                                    name: String::from("device_type"),
+                                    value: Some(vec![Str(String::from("cpu"))]),
+                                },
+                                Property {
+                                    name: String::from("reg"),
+                                    value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
+                                },
+                            ],
+                            children: vec![Node {
+                                name: NodeName::Extended {
+                                    name: "l2-cache".to_string(),
+                                    labels: vec!["L2".to_string(), "L2_1".to_string()],
+                                    address: None,
+                                },
+                                contents: NodeContents {
+                                    props: vec![Property {
+                                        name: String::from("compatible"),
+                                        value: Some(vec![Str(String::from("cache"))]),
+                                    }],
+                                    children: vec![],
+                                    includes: vec![],
+                                },
+                            }],
+                            includes: vec![],
                         },
-                        Property {
-                            name: String::from("cache-block-size"),
-                            value: Some(vec![CellArray(vec![Expr(Lit(32))])]),
-                        },
-                        Property {
-                            name: String::from("timebase-frequency"),
-                            value: Some(vec![CellArray(vec![Expr(Lit(82_500_000))])]),
-                        },
-                        Property {
-                            name: String::from("next-level-cache"),
-                            value: Some(vec![CellArray(vec![Ref(String::from("L2_0"))])]),
-                        },
-                    ],
-                    children: vec![Node {
-                        name: String::from("l2-cache"),
-                        address: None,
-                        labels: vec![String::from("L2_0")],
-                        props: vec![Property {
-                            name: String::from("compatible"),
-                            value: Some(vec![Str(String::from("cache"))]),
-                        }],
-                        children: vec![],
-                        includes: vec![],
-                    }],
-                    includes: vec![],
-                },
-                Node {
-                    name: String::from("cpu"),
-                    address: Some(String::from("1")),
-                    labels: vec![],
-                    props: vec![
-                        Property {
-                            name: String::from("device_type"),
-                            value: Some(vec![Str(String::from("cpu"))]),
-                        },
-                        Property {
-                            name: String::from("reg"),
-                            value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
-                        },
-                    ],
-                    children: vec![Node {
-                        name: String::from("l2-cache"),
-                        address: None,
-                        labels: vec![String::from("L2"), String::from("L2_1")],
-                        props: vec![Property {
-                            name: String::from("compatible"),
-                            value: Some(vec![Str(String::from("cache"))]),
-                        }],
-                        children: vec![],
-                        includes: vec![],
-                    }],
-                    includes: vec![],
-                },
-            ],
-            includes: vec![],
+                    },
+                ],
+                includes: vec![],
+            },
         };
 
-        match node::<VerboseError<&str>>(input).finish() {
+        match inner_node::<VerboseError<&str>>(input).finish() {
             Ok(res) => assert_eq!(res, ("", exp)),
             Err(e) => panic!("{}", convert_error(input, e)),
         }
