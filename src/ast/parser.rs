@@ -3,9 +3,10 @@ use std::{io::Read, str};
 use anyhow::{bail, Result};
 use nom::{
     branch::alt,
-    bytes::complete::{is_a, is_not, tag, take_while_m_n},
+    bytes::complete::{escaped, is_a, is_not, tag, take_while_m_n},
     character::complete::{
-        alphanumeric1, anychar, char, hex_digit1, i64, line_ending, multispace1, space1, u64,
+        alphanumeric1, anychar, char, hex_digit1, i64, line_ending, multispace1, one_of, space1,
+        u64,
     },
     combinator::{cut, map, opt, recognize},
     error::{convert_error, ParseError, VerboseError},
@@ -742,11 +743,15 @@ fn printable_ascii<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    recognize(many0(alt((
-        alphanumeric1,
-        space1,
-        is_a("!#$%&'()*+,-./:;<=>?@[]^_`{|}~"),
-    ))))(input)
+    recognize(many0(escaped(
+        alt((
+            alphanumeric1,
+            space1,
+            is_a("!#$%&'()*+,-./:;<=>?@[]^_`{|}~"),
+        )),
+        '\\',
+        one_of("\\\""),
+    )))(input)
 }
 
 /// Recognize a valid path in an `/include/` directive.
@@ -888,6 +893,16 @@ mod tests {
         error::{convert_error, VerboseError},
         Finish,
     };
+
+    #[test]
+    fn parse_escaped_strings() {
+        for (input, exp) in [(r#""Escaped string: \"\\\"""#, r#"Escaped string: \"\\\""#)] {
+            match string_literal::<VerboseError<&str>>(input).finish() {
+                Ok(res) => assert_eq!(res, ("", exp)),
+                Err(e) => panic!("{}", convert_error(input, e)),
+            }
+        }
+    }
 
     #[test]
     fn parse_line_comments() {
