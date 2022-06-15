@@ -179,6 +179,7 @@ where
         Node(Node),
         Prop(Property),
         Include(String),
+        DeletedProp(String),
     }
 
     // A node can contain 0+ properties and 0+ child nodes.
@@ -189,6 +190,9 @@ where
             map(inner_node, NodeContent::Node),
             map(property, NodeContent::Prop),
             map(include_directive, |s| NodeContent::Include(s.to_string())),
+            map(deleted_property, |s| {
+                NodeContent::DeletedProp(s.to_string())
+            }),
         ))),
         |contents| {
             contents
@@ -198,6 +202,7 @@ where
                         NodeContent::Prop(p) => contents.props.push(p),
                         NodeContent::Node(c) => contents.children.push(c),
                         NodeContent::Include(c) => contents.includes.push(c),
+                        NodeContent::DeletedProp(c) => contents.deleted_props.push(c),
                     };
                     contents
                 })
@@ -328,6 +333,17 @@ where
     E: ParseError<&'a str>,
 {
     lexeme(map(integer_expr, PropertyCell::Expr))(input)
+}
+
+/// Parse a deleted property.
+fn deleted_property<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    preceded(
+        delete_property_keyword,
+        cut(terminated(prop_name, terminator)),
+    )(input)
 }
 
 /// Parse a valid node reference.
@@ -690,6 +706,14 @@ where
     lexeme(tag("/bits/"))(input)
 }
 
+/// Recognize the `/delete-property/` keyword.
+fn delete_property_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(tag("/delete-property/"))(input)
+}
+
 /* === Utility functions === */
 
 /// Parse a lexeme using the combinator passed as its argument,
@@ -968,8 +992,7 @@ mod tests {
                         value: Some(vec![CellArray(vec![Expr(Lit(1))])]),
                     },
                 ],
-                children: vec![],
-                includes: vec![],
+                ..Default::default()
             },
         };
 
@@ -1080,11 +1103,10 @@ mod tests {
                                         name: String::from("compatible"),
                                         value: Some(vec![Str(String::from("cache"))]),
                                     }],
-                                    children: vec![],
-                                    includes: vec![],
+                                    ..Default::default()
                                 },
                             }],
-                            includes: vec![],
+                            ..Default::default()
                         },
                     },
                     Node {
@@ -1115,15 +1137,14 @@ mod tests {
                                         name: String::from("compatible"),
                                         value: Some(vec![Str(String::from("cache"))]),
                                     }],
-                                    children: vec![],
-                                    includes: vec![],
+                                    ..Default::default()
                                 },
                             }],
-                            includes: vec![],
+                            ..Default::default()
                         },
                     },
                 ],
-                includes: vec![],
+                ..Default::default()
             },
         };
 
@@ -1142,6 +1163,23 @@ mod tests {
             match include_directive::<VerboseError<&str>>(input).finish() {
                 Ok(res) => assert_eq!(res, ("", inc)),
                 Err(e) => panic!("{}", convert_error(input, e)),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_deleted_properties() {
+        for (input, exp) in [
+            ("/delete-property/ foo;", Some("foo")),
+            ("/delete-property/ foo,bar;", Some("foo,bar")),
+            ("/delete-property/ foo,bar", None),
+            ("/delete_property/ foo,bar;", None),
+            ("/delete-property foo,bar;", None),
+            ("foo,bar;", None),
+        ] {
+            match deleted_property::<VerboseError<&str>>(input).finish() {
+                Ok(res) => assert_eq!(res, ("", exp.unwrap())),
+                Err(_) => assert!(exp.is_none()),
             }
         }
     }

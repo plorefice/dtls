@@ -36,6 +36,7 @@ pub struct NodeContents {
     props: Vec<Property>,
     children: Vec<Node>,
     includes: Vec<String>,
+    deleted_props: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
