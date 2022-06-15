@@ -39,6 +39,7 @@ where
         Node(Node),
         Include(String),
         VersionDirective,
+        DeletedNodeDirective(NodeId),
     }
 
     let root_node = map(root_node, TopLevelContents::Node);
@@ -47,6 +48,7 @@ where
     let include_directive = map(include_directive, |s| {
         TopLevelContents::Include(s.to_string())
     });
+    let deleted_node_directive = map(deleted_node, TopLevelContents::DeletedNodeDirective);
 
     map(
         many0(alt((
@@ -54,19 +56,17 @@ where
             node_override,
             version_directive,
             include_directive,
+            deleted_node_directive,
         ))),
         move |contents| {
-            let mut dts = Dts {
-                version: DtsVersion::V0,
-                includes: vec![],
-                nodes: vec![],
-            };
+            let mut dts = Dts::default();
 
             for content in contents {
                 match content {
                     TopLevelContents::Node(node) => dts.nodes.push(node),
                     TopLevelContents::Include(inc) => dts.includes.push(inc),
                     TopLevelContents::VersionDirective => dts.version = DtsVersion::V1,
+                    TopLevelContents::DeletedNodeDirective(n) => dts.deleted_nodes.push(n),
                 }
             }
 
@@ -95,11 +95,8 @@ where
     map(
         tuple((root_node_name, node_body, cut(terminator))),
         |(name, contents, _)| Node {
-            name: NodeName::Extended {
-                name: name.to_string(),
-                labels: vec![],
-                address: None,
-            },
+            id: NodeId::Name(name.to_string(), None),
+            labels: vec![],
             contents,
         },
     )(input)
@@ -114,9 +111,10 @@ where
     E: ParseError<&'a str>,
 {
     map(
-        tuple((node_reference, node_body, cut(terminator))),
-        |(name, contents, _)| Node {
-            name: NodeName::Ref(name.to_string()),
+        tuple((node_labels, node_reference, node_body, cut(terminator))),
+        |(labels, reference, contents, _)| Node {
+            id: NodeId::Ref(reference),
+            labels,
             contents,
         },
     )(input)
@@ -130,8 +128,12 @@ where
     E: ParseError<&'a str>,
 {
     map(
-        tuple((node_name, node_body, cut(terminator))),
-        |(name, contents, _)| Node { name, contents },
+        tuple((node_labels, node_name, node_body, cut(terminator))),
+        |(labels, name, contents, _)| Node {
+            id: name,
+            labels,
+            contents,
+        },
     )(input)
 }
 
@@ -179,6 +181,7 @@ where
         Prop(Property),
         Include(String),
         DeletedProp(String),
+        DeletedNode(NodeId),
     }
 
     // A node can contain 0+ properties and 0+ child nodes.
@@ -192,6 +195,7 @@ where
             map(deleted_property, |s| {
                 NodeContent::DeletedProp(s.to_string())
             }),
+            map(deleted_node, NodeContent::DeletedNode),
         ))),
         |contents| {
             contents
@@ -202,6 +206,7 @@ where
                         NodeContent::Node(c) => contents.children.push(c),
                         NodeContent::Include(c) => contents.includes.push(c),
                         NodeContent::DeletedProp(c) => contents.deleted_props.push(c),
+                        NodeContent::DeletedNode(c) => contents.deleted_nodes.push(c),
                     };
                     contents
                 })
@@ -276,7 +281,7 @@ fn prop_value_alias<'a, E>(input: &'a str) -> IResult<&'a str, PropertyValue, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(map(node_reference, |s| PropertyValue::Alias(s.to_string())))(input)
+    map(node_reference, PropertyValue::Ref)(input)
 }
 
 /// Parse a property value corresponding to a string.
@@ -323,7 +328,7 @@ fn prop_cell_ref<'a, E>(input: &'a str) -> IResult<&'a str, PropertyCell, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(map(node_reference, |s| PropertyCell::Ref(s.to_string())))(input)
+    map(node_reference, PropertyCell::Ref)(input)
 }
 
 /// Parse a property cell containing an integer expression.
@@ -332,6 +337,20 @@ where
     E: ParseError<&'a str>,
 {
     lexeme(map(integer_expr, PropertyCell::Expr))(input)
+}
+
+/// Parse a deleted node.
+fn deleted_node<'a, E>(input: &'a str) -> IResult<&'a str, NodeId, E>
+where
+    E: ParseError<&'a str>,
+{
+    preceded(
+        delete_node_keyword,
+        cut(terminated(
+            alt((node_name, map(node_reference, NodeId::Ref))),
+            terminator,
+        )),
+    )(input)
 }
 
 /// Parse a deleted property.
@@ -346,32 +365,25 @@ where
 }
 
 /// Parse a valid node reference.
-fn node_reference<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+fn node_reference<'a, E>(input: &'a str) -> IResult<&'a str, Reference, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(preceded(char('&'), cut(node_label_str)))(input)
+    map(preceded(reference_operator, cut(node_label_str)), |s| {
+        Reference(s.to_string())
+    })(input)
 }
 
 /// Parse a valid node name.
 ///
-/// A node name has composed of an optional number of labels, a node-name part
-/// and an optional node-address in hex format.
-fn node_name<'a, E>(input: &'a str) -> IResult<&'a str, NodeName, E>
+/// A node name is composed of node-name part and an optional unit-address in hex format.
+fn node_name<'a, E>(input: &'a str) -> IResult<&'a str, NodeId, E>
 where
     E: ParseError<&'a str>,
 {
     map(
-        tuple((
-            node_labels,
-            node_name_identifier,
-            opt(node_address_identifier),
-        )),
-        |(labels, name, address)| NodeName::Extended {
-            name: name.to_string(),
-            labels,
-            address: address.map(String::from),
-        },
+        tuple((node_name_identifier, opt(node_address_identifier))),
+        |(name, address)| NodeId::Name(name.to_string(), address.map(String::from)),
     )(input)
 }
 
@@ -591,6 +603,14 @@ where
     lexeme(char(']'))(input)
 }
 
+/// Recognize a reference operator.
+fn reference_operator<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(char('&'))(input)
+}
+
 /// Recognize an arithmetic unary operator.
 fn arith_operator_unary<'a, E>(input: &'a str) -> IResult<&'a str, UnaryOperator, E>
 where
@@ -705,6 +725,14 @@ where
     lexeme(tag("/bits/"))(input)
 }
 
+/// Recognize the `/delete-node/` keyword.
+fn delete_node_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+where
+    E: ParseError<&'a str>,
+{
+    lexeme(tag("/delete-node/"))(input)
+}
+
 /// Recognize the `/delete-property/` keyword.
 fn delete_property_keyword<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
@@ -791,61 +819,21 @@ mod tests {
     #[test]
     fn parse_node_names() {
         for (input, exp) in [
-            (
-                "cpus",
-                NodeName::Extended {
-                    name: "cpus".to_string(),
-                    labels: vec![],
-                    address: None,
-                },
-            ),
+            ("cpus", NodeId::Name("cpus".to_string(), None)),
             (
                 "cpu@0",
-                NodeName::Extended {
-                    name: "cpu".to_string(),
-                    labels: vec![],
-                    address: Some("0".to_string()),
-                },
+                NodeId::Name("cpu".to_string(), Some("0".to_string())),
             ),
-            (
-                "l2-cache",
-                NodeName::Extended {
-                    name: "l2-cache".to_string(),
-                    labels: vec![],
-                    address: None,
-                },
-            ),
-            (
-                "open-pic",
-                NodeName::Extended {
-                    name: "open-pic".to_string(),
-                    labels: vec![],
-                    address: None,
-                },
-            ),
-            (
-                "soc_gpio1",
-                NodeName::Extended {
-                    name: "soc_gpio1".to_string(),
-                    labels: vec![],
-                    address: None,
-                },
-            ),
+            ("l2-cache", NodeId::Name("l2-cache".to_string(), None)),
+            ("open-pic", NodeId::Name("open-pic".to_string(), None)),
+            ("soc_gpio1", NodeId::Name("soc_gpio1".to_string(), None)),
             (
                 "memory@0",
-                NodeName::Extended {
-                    name: "memory".to_string(),
-                    labels: vec![],
-                    address: Some("0".to_string()),
-                },
+                NodeId::Name("memory".to_string(), Some("0".to_string())),
             ),
             (
                 "uart@fe001000",
-                NodeName::Extended {
-                    name: "uart".to_string(),
-                    labels: vec![],
-                    address: Some("fe001000".to_string()),
-                },
+                NodeId::Name("uart".to_string(), Some("fe001000".to_string())),
             ),
         ] {
             match node_name::<VerboseError<&str>>(input).finish() {
@@ -916,7 +904,7 @@ mod tests {
                     name: String::from("example"),
                     value: Some(vec![
                         CellArray(vec![
-                            Ref(String::from("mpic")),
+                            PropertyCell::Ref(Reference("mpic".to_string())),
                             Expr(Lit(0xf00f_0000)),
                             Expr(Lit(19)),
                         ]),
@@ -949,7 +937,9 @@ mod tests {
                 r#"next-level-cache = <&L2_0>;"#,
                 Property {
                     name: String::from("next-level-cache"),
-                    value: Some(vec![CellArray(vec![Ref(String::from("L2_0"))])]),
+                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference(
+                        "L2_0".to_string(),
+                    ))])]),
                 },
             ),
             (
@@ -963,7 +953,7 @@ mod tests {
                 r#"serial0 = &usart3;"#,
                 Property {
                     name: String::from("serial0"),
-                    value: Some(vec![Alias(String::from("usart3"))]),
+                    value: Some(vec![PropertyValue::Ref(Reference("usart3".to_string()))]),
                 },
             ),
         ] {
@@ -983,11 +973,8 @@ mod tests {
         let input = r#"/ { #address-cells = <2>; #size-cells = <1>; };"#;
 
         let exp = Node {
-            name: NodeName::Extended {
-                name: "/".to_string(),
-                labels: vec![],
-                address: None,
-            },
+            id: NodeId::Name("/".to_string(), None),
+            labels: vec![],
             contents: NodeContents {
                 props: vec![
                     Property {
@@ -1045,11 +1032,8 @@ mod tests {
 "#;
 
         let exp = Node {
-            name: NodeName::Extended {
-                name: "cpus".to_string(),
-                labels: vec![],
-                address: None,
-            },
+            id: NodeId::Name("cpus".to_string(), None),
+            labels: vec![],
             contents: NodeContents {
                 props: vec![
                     Property {
@@ -1063,11 +1047,8 @@ mod tests {
                 ],
                 children: vec![
                     Node {
-                        name: NodeName::Extended {
-                            name: "cpu".to_string(),
-                            labels: vec![],
-                            address: Some("0".to_string()),
-                        },
+                        id: NodeId::Name("cpu".to_string(), Some("0".to_string())),
+                        labels: vec![],
                         contents: NodeContents {
                             props: vec![
                                 Property {
@@ -1096,15 +1077,14 @@ mod tests {
                                 },
                                 Property {
                                     name: String::from("next-level-cache"),
-                                    value: Some(vec![CellArray(vec![Ref(String::from("L2_0"))])]),
+                                    value: Some(vec![CellArray(vec![PropertyCell::Ref(
+                                        Reference("L2_0".to_string()),
+                                    )])]),
                                 },
                             ],
                             children: vec![Node {
-                                name: NodeName::Extended {
-                                    name: "l2-cache".to_string(),
-                                    labels: vec!["L2_0".to_string()],
-                                    address: None,
-                                },
+                                id: NodeId::Name("l2-cache".to_string(), None),
+                                labels: vec!["L2_0".to_string()],
                                 contents: NodeContents {
                                     props: vec![Property {
                                         name: String::from("compatible"),
@@ -1117,11 +1097,8 @@ mod tests {
                         },
                     },
                     Node {
-                        name: NodeName::Extended {
-                            name: "cpu".to_string(),
-                            labels: vec![],
-                            address: Some("1".to_string()),
-                        },
+                        id: NodeId::Name("cpu".to_string(), Some("1".to_string())),
+                        labels: vec![],
                         contents: NodeContents {
                             props: vec![
                                 Property {
@@ -1134,11 +1111,8 @@ mod tests {
                                 },
                             ],
                             children: vec![Node {
-                                name: NodeName::Extended {
-                                    name: "l2-cache".to_string(),
-                                    labels: vec!["L2".to_string(), "L2_1".to_string()],
-                                    address: None,
-                                },
+                                id: NodeId::Name("l2-cache".to_string(), None),
+                                labels: vec!["L2".to_string(), "L2_1".to_string()],
                                 contents: NodeContents {
                                     props: vec![Property {
                                         name: String::from("compatible"),
@@ -1192,20 +1166,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_deleted_node_directives() {
+        for (input, exp) in [
+            (
+                "/delete-node/ foo;",
+                Some(NodeId::Name("foo".to_string(), None)),
+            ),
+            (
+                "/delete-node/ bar@0,0;",
+                Some(NodeId::Name("bar".to_string(), Some("0,0".to_string()))),
+            ),
+            (
+                "/delete-node/ &baz;",
+                Some(NodeId::Ref(Reference("baz".to_string()))),
+            ),
+        ] {
+            match deleted_node::<VerboseError<&str>>(input).finish() {
+                Ok(res) => assert_eq!(res, ("", exp.unwrap())),
+                Err(_) => assert!(exp.is_none()),
+            }
+        }
+    }
+
+    #[test]
     fn parse_multiple_version_directives() {
         let input = r#"/dts-v1/; /dts-v1/; / { };"#;
 
         let exp = Dts {
             version: DtsVersion::V1,
             nodes: vec![Node {
-                name: NodeName::Extended {
-                    name: "/".to_string(),
-                    labels: vec![],
-                    address: None,
-                },
+                id: NodeId::Name("/".to_string(), None),
+                labels: vec![],
                 contents: Default::default(),
             }],
-            includes: vec![],
+            ..Default::default()
         };
 
         match dts_file::<VerboseError<&str>>(input).finish() {
@@ -1270,6 +1264,8 @@ mod tests {
         interrupts = < 4 0 >;
     };
 
+    /delete-node/ &gpio;
+
     external-bus {
         #address-cells = <2>;
         #size-cells = <1>;
@@ -1302,6 +1298,14 @@ mod tests {
         };
     };
 };
+
+/ {
+    model = "Coyotes Revenge";
+
+    /delete-property/ compatible;
+};
+
+/delete-node/ &pioC;
 "#;
 
         // Someday I'll write a proper test for the above file...
