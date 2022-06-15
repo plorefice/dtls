@@ -5,7 +5,7 @@ use nom::{
     branch::alt,
     bytes::complete::{is_a, is_not, tag, take_while_m_n},
     character::complete::{
-        alphanumeric1, anychar, char, hex_digit1, line_ending, multispace1, space1, u32,
+        alphanumeric1, anychar, char, hex_digit1, i64, line_ending, multispace1, space1,
     },
     combinator::{cut, map, opt, recognize},
     error::{convert_error, ParseError, VerboseError},
@@ -100,15 +100,15 @@ fn node<'a, E>(input: &'a str) -> IResult<&'a str, Node, E>
 where
     E: ParseError<&'a str>,
 {
-    let label = terminated(node_label, label_separator);
+    let labels = many0(terminated(node_label, label_separator));
     let contents = preceded(block_start, cut(terminated(node_contents, block_end)));
 
     map(
-        tuple((opt(label), node_name, contents, cut(terminator))),
-        |(label, (name, address), (props, children), _)| Node {
+        tuple((labels, node_name, contents, cut(terminator))),
+        |(labels, (name, address), (props, children), _)| Node {
             name: name.to_string(),
             address: address.map(|address| address.to_string()),
-            label: label.map(|label| label.to_string()),
+            labels: labels.into_iter().map(|label| label.to_string()).collect(),
             props,
             children,
         },
@@ -209,7 +209,7 @@ where
             cut(dec),
             cut(delimited(cell_array_start, prop_cell_expr, cell_array_end)),
         )),
-        |(_, n, bits)| PropertyValue::Bits(n, bits),
+        |(_, n, bits)| PropertyValue::Bits(n as u32, bits),
     )(input)
 }
 
@@ -387,7 +387,7 @@ where
 }
 
 /// Parse a valid number in any base.
-fn numeric_literal<'a, E>(input: &'a str) -> IResult<&'a str, u32, E>
+fn numeric_literal<'a, E>(input: &'a str) -> IResult<&'a str, i64, E>
 where
     E: ParseError<&'a str>,
 {
@@ -551,22 +551,22 @@ where
     )))(input)
 }
 
-/// Parse a natural number in base 16, prefixed by `0x`.
-fn hex<'a, E>(input: &'a str) -> IResult<&'a str, u32, E>
+/// Parse an integer number in base 16, prefixed by `0x`.
+fn hex<'a, E>(input: &'a str) -> IResult<&'a str, i64, E>
 where
     E: ParseError<&'a str>,
 {
     map(preceded(tag("0x"), cut(hex_digit1)), |s: &str| {
-        u32::from_str_radix(s, 16).unwrap()
+        i64::from_str_radix(s, 16).unwrap()
     })(input)
 }
 
-/// Parse a natural number in base 10.
-fn dec<'a, E>(input: &'a str) -> IResult<&'a str, u32, E>
+/// Parse an integer number in base 10.
+fn dec<'a, E>(input: &'a str) -> IResult<&'a str, i64, E>
 where
     E: ParseError<&'a str>,
 {
-    u32(input)
+    i64(input)
 }
 
 /// Parse a byte represented by two hex digits.
@@ -884,7 +884,7 @@ mod tests {
                 device_type = "cpu";
                 reg = <1>;
 
-                L2_1:l2-cache {
+                L2: L2_1: l2-cache {
                     compatible = "cache";
                 };
             };
@@ -894,7 +894,7 @@ mod tests {
         let exp = Node {
             name: String::from("cpus"),
             address: None,
-            label: None,
+            labels: vec![],
             props: vec![
                 Property {
                     name: String::from("#address-cells"),
@@ -909,7 +909,7 @@ mod tests {
                 Node {
                     name: String::from("cpu"),
                     address: Some(String::from("0")),
-                    label: None,
+                    labels: vec![],
                     props: vec![
                         Property {
                             name: String::from("device_type"),
@@ -943,7 +943,7 @@ mod tests {
                     children: vec![Node {
                         name: String::from("l2-cache"),
                         address: None,
-                        label: Some(String::from("L2_0")),
+                        labels: vec![String::from("L2_0")],
                         props: vec![Property {
                             name: String::from("compatible"),
                             value: Some(vec![Str(String::from("cache"))]),
@@ -954,7 +954,7 @@ mod tests {
                 Node {
                     name: String::from("cpu"),
                     address: Some(String::from("1")),
-                    label: None,
+                    labels: vec![],
                     props: vec![
                         Property {
                             name: String::from("device_type"),
@@ -968,7 +968,7 @@ mod tests {
                     children: vec![Node {
                         name: String::from("l2-cache"),
                         address: None,
-                        label: Some(String::from("L2_1")),
+                        labels: vec![String::from("L2"), String::from("L2_1")],
                         props: vec![Property {
                             name: String::from("compatible"),
                             value: Some(vec![Str(String::from("cache"))]),

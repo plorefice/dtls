@@ -24,7 +24,7 @@ pub enum Include {
 #[derive(Debug, PartialEq)]
 pub struct Node {
     name: String,
-    label: Option<String>,
+    labels: Vec<String>,
     address: Option<String>,
     props: Vec<Property>,
     children: Vec<Node>,
@@ -53,7 +53,7 @@ pub enum PropertyCell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegerExpression {
-    Lit(u32),
+    Lit(i64),
     Unary(UnaryOperator, Box<IntegerExpression>),
     Binary(
         Box<IntegerExpression>,
