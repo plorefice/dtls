@@ -293,6 +293,8 @@ where
 }
 
 /// Parse a property value corresponding to a cell array.
+///
+/// A cell array can be empty.
 fn prop_value_cell_array<'a, E>(input: &'a str) -> IResult<&'a str, PropertyValue, E>
 where
     E: ParseError<&'a str>,
@@ -301,7 +303,7 @@ where
         preceded(
             cell_array_start,
             cut(terminated(
-                many1(alt((prop_cell_expr, prop_cell_ref))),
+                many0(alt((prop_cell_expr, prop_cell_ref))),
                 cell_array_end,
             )),
         ),
@@ -954,6 +956,13 @@ mod tests {
                 Property {
                     name: String::from("serial0"),
                     value: Some(vec![PropertyValue::Ref(Reference("usart3".to_string()))]),
+                },
+            ),
+            (
+                r#"pinctrl-0 = <>;"#,
+                Property {
+                    name: String::from("pinctrl-0"),
+                    value: Some(vec![PropertyValue::CellArray(vec![])]),
                 },
             ),
         ] {
