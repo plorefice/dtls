@@ -5,7 +5,7 @@ mod parser;
 #[derive(Debug, PartialEq)]
 pub struct Dts {
     version: DtsVersion,
-    includes: Vec<Include>,
+    includes: Vec<String>,
     nodes: Vec<Node>,
 }
 
@@ -16,18 +16,13 @@ pub enum DtsVersion {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Include {
-    Local(String),
-    Global(String),
-}
-
-#[derive(Debug, PartialEq)]
 pub struct Node {
     name: String,
     labels: Vec<String>,
     address: Option<String>,
     props: Vec<Property>,
     children: Vec<Node>,
+    includes: Vec<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -42,7 +37,7 @@ pub enum PropertyValue {
     Alias(String),
     Bytestring(Vec<u8>),
     CellArray(Vec<PropertyCell>),
-    Bits(u32, PropertyCell),
+    Bits(u32, Vec<IntegerExpression>),
 }
 
 #[derive(Debug, PartialEq)]

@@ -35,7 +35,7 @@ where
     E: ParseError<&'a str>,
 {
     enum FileContent {
-        Include(Include),
+        Include(String),
         Node(Node),
     }
 
@@ -43,7 +43,7 @@ where
 
     map(
         many0(alt((
-            map(include, FileContent::Include),
+            map(include_directive, |s| FileContent::Include(s.to_string())),
             map(node, FileContent::Node),
         ))),
         move |contents| {
@@ -81,20 +81,6 @@ where
     )(input)
 }
 
-/// Parse an include directive.
-fn include<'a, E>(input: &'a str) -> IResult<&'a str, Include, E>
-where
-    E: ParseError<&'a str>,
-{
-    preceded(
-        include_prefix,
-        cut(alt((
-            map(global_include_path, |s| Include::Global(s.to_string())),
-            map(local_include_path, |s| Include::Local(s.to_string())),
-        ))),
-    )(input)
-}
-
 /// Parse a device tree node.
 fn node<'a, E>(input: &'a str) -> IResult<&'a str, Node, E>
 where
@@ -105,12 +91,13 @@ where
 
     map(
         tuple((labels, node_name, contents, cut(terminator))),
-        |(labels, (name, address), (props, children), _)| Node {
+        |(labels, (name, address), (props, children, includes), _)| Node {
             name: name.to_string(),
             address: address.map(|address| address.to_string()),
             labels: labels.into_iter().map(|label| label.to_string()).collect(),
             props,
             children,
+            includes,
         },
     )(input)
 }
@@ -124,13 +111,17 @@ where
 }
 
 /// Parse the contents of a node.
-fn node_contents<'a, E>(input: &'a str) -> IResult<&'a str, (Vec<Property>, Vec<Node>), E>
+#[allow(clippy::type_complexity)]
+fn node_contents<'a, E>(
+    input: &'a str,
+) -> IResult<&'a str, (Vec<Property>, Vec<Node>, Vec<String>), E>
 where
     E: ParseError<&'a str>,
 {
     enum NodeContent {
         Prop(Property),
         Node(Node),
+        Include(String),
     }
 
     // A node can contain 0+ properties and 0+ child nodes.
@@ -140,17 +131,20 @@ where
         many0(alt((
             map(node, NodeContent::Node),
             map(property, NodeContent::Prop),
+            map(include_directive, |s| NodeContent::Include(s.to_string())),
         ))),
         |contents| {
-            contents
-                .into_iter()
-                .fold((vec![], vec![]), |(mut props, mut nodes), elem| {
+            contents.into_iter().fold(
+                (vec![], vec![], vec![]),
+                |(mut props, mut nodes, mut includes), elem| {
                     match elem {
                         NodeContent::Prop(p) => props.push(p),
                         NodeContent::Node(c) => nodes.push(c),
+                        NodeContent::Include(c) => includes.push(c),
                     };
-                    (props, nodes)
-                })
+                    (props, nodes, includes)
+                },
+            )
         },
     )(input)
 }
@@ -207,7 +201,11 @@ where
         tuple((
             bits_keyword,
             cut(dec),
-            cut(delimited(cell_array_start, prop_cell_expr, cell_array_end)),
+            cut(delimited(
+                cell_array_start,
+                many1(integer_expr),
+                cell_array_end,
+            )),
         )),
         |(_, n, bits)| PropertyValue::Bits(n as u32, bits),
     )(input)
@@ -273,10 +271,7 @@ fn prop_cell_expr<'a, E>(input: &'a str) -> IResult<&'a str, PropertyCell, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(map(
-        alt((integer_expr_parens, integer_expr_lit)),
-        PropertyCell::Expr,
-    ))(input)
+    lexeme(map(integer_expr, PropertyCell::Expr))(input)
 }
 
 /// Parse a valid node reference.
@@ -394,25 +389,14 @@ where
     lexeme(alt((hex, dec)))(input)
 }
 
-/// Parse a valid global include path.
-fn global_include_path<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+/// Parse a valid include directive.
+fn include_directive<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
     preceded(
-        cell_array_start,
-        cut(terminated(include_path_bracketed_str, cell_array_end)),
-    )(input)
-}
-
-/// Parse a valid local include path.
-fn local_include_path<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
-where
-    E: ParseError<&'a str>,
-{
-    preceded(
-        char('"'),
-        cut(terminated(include_path_quoted_str, char('"'))),
+        include_prefix,
+        cut(delimited(char('"'), include_path_str, char('"'))),
     )(input)
 }
 
@@ -584,7 +568,7 @@ fn printable_ascii<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    recognize(many1(alt((
+    recognize(many0(alt((
         alphanumeric1,
         space1,
         is_a("!#$%&'()*+,-./:;<=>?@[]^_`{|}~"),
@@ -596,23 +580,15 @@ fn include_prefix<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    lexeme(tag("#include"))(input)
+    lexeme(tag("/include/"))(input)
 }
 
-/// Recognize a valid path in an #include <...> directive.
-fn include_path_bracketed_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
+/// Recognize a valid path in an `/include/` directive.
+fn include_path_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
-    recognize(separated_list1(char('/'), is_not("/\0<>")))(input)
-}
-
-/// Recognize a valid path in an #include "..." directive.
-fn include_path_quoted_str<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
-where
-    E: ParseError<&'a str>,
-{
-    recognize(separated_list1(char('/'), is_not("/\0\"")))(input)
+    recognize(separated_list1(char('/'), is_not("/\0\"<>")))(input)
 }
 
 /// Recognize a valid node name string.
@@ -949,7 +925,9 @@ mod tests {
                             value: Some(vec![Str(String::from("cache"))]),
                         }],
                         children: vec![],
+                        includes: vec![],
                     }],
+                    includes: vec![],
                 },
                 Node {
                     name: String::from("cpu"),
@@ -974,9 +952,12 @@ mod tests {
                             value: Some(vec![Str(String::from("cache"))]),
                         }],
                         children: vec![],
+                        includes: vec![],
                     }],
+                    includes: vec![],
                 },
             ],
+            includes: vec![],
         };
 
         match node::<VerboseError<&str>>(input).finish() {
@@ -988,16 +969,10 @@ mod tests {
     #[test]
     fn parse_includes() {
         for (input, inc) in [
-            (
-                r#"#include <arm/pinctrl.h>"#,
-                Include::Global(String::from("arm/pinctrl.h")),
-            ),
-            (
-                r#"#include "sama5.dtsi""#,
-                Include::Local(String::from("sama5.dtsi")),
-            ),
+            (r#"/include/ "sama5.dtsi""#, "sama5.dtsi"),
+            (r#"/include/ "inner/sample.dtsi""#, "inner/sample.dtsi"),
         ] {
-            match include::<VerboseError<&str>>(input).finish() {
+            match include_directive::<VerboseError<&str>>(input).finish() {
                 Ok(res) => assert_eq!(res, ("", inc)),
                 Err(e) => panic!("{}", convert_error(input, e)),
             }
