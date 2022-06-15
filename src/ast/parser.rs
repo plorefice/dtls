@@ -676,9 +676,10 @@ fn unsigned_hex<'a, E>(input: &'a str) -> IResult<&'a str, u64, E>
 where
     E: ParseError<&'a str>,
 {
-    map(preceded(tag("0x"), cut(hex_digit1)), |s: &str| {
-        u64::from_str_radix(s, 16).unwrap()
-    })(input)
+    map(
+        preceded(alt((tag("0x"), tag("0X"))), cut(hex_digit1)),
+        |s: &str| u64::from_str_radix(s, 16).unwrap(),
+    )(input)
 }
 
 /// Parse a signed integer number in base 10.
@@ -1317,7 +1318,7 @@ mod tests {
 
     serial@101f2000 {
         compatible = "arm,pl011";
-        reg = <0x101f2000 0x1000 >;
+        reg = <0x101f2000 0X1000 >;
         interrupts = < 2 0 >;
     };
 
