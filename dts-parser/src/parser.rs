@@ -30,23 +30,15 @@ pub fn from_str(s: &str) -> Result<Root, nom::error::Error<Input>> {
 
 /// Parse a Device Tree source file.
 fn root<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Root, E> {
-    let root_node = map(root_node, RootItem::Node);
-    let node_override = map(node_override, RootItem::Node);
-    let version_directive = map(version_directive, RootItem::Version);
-    let include_directive = map(include_directive, RootItem::Include);
-    let deleted_node_directive = map(deleted_node, RootItem::DeleteNode);
-    let omit_if_no_ref_directive = map(omit_if_no_ref, RootItem::OmitNode);
-    let memreserve_directive = map(memreserve, RootItem::MemReserve);
-
     let (input, items) = fold_many0(
         alt((
-            root_node,
-            node_override,
-            version_directive,
-            include_directive,
-            deleted_node_directive,
-            omit_if_no_ref_directive,
-            memreserve_directive,
+            map(root_node, RootItem::Node),
+            map(node_override, RootItem::Node),
+            map(version_directive, RootItem::Version),
+            map(include_directive, RootItem::Include),
+            map(deleted_node, RootItem::DeleteNode),
+            map(omit_if_no_ref, RootItem::OmitNode),
+            map(memreserve, RootItem::MemReserve),
         )),
         Vec::new,
         move |mut items, item| {
@@ -99,7 +91,7 @@ fn node_override<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
                 .map(|s| str::from_utf8(s).unwrap())
                 .collect(),
             contents,
-            omit_if_no_ref: omit.is_some(),
+            ommittable: omit.is_some(),
         },
     )(input)
 }
@@ -123,7 +115,7 @@ fn inner_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Nod
                 .map(|s| str::from_utf8(s).unwrap())
                 .collect(),
             contents,
-            omit_if_no_ref: omit.is_some(),
+            ommittable: omit.is_some(),
         },
     )(input)
 }
@@ -134,7 +126,7 @@ fn root_node_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a,
 }
 
 /// Parse the body of a device tree node.
-fn node_body<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeContents, E> {
+fn node_body<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Vec<NodeItem>, E> {
     preceded(left_brace, cut(terminated(node_contents, right_brace)))(input)
 }
 
@@ -149,41 +141,21 @@ fn node_label<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Inp
 }
 
 /// Parse the contents of a node.
-fn node_contents<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeContents, E> {
-    enum NodeContent<'s> {
-        Node(Node<'s>),
-        Prop(Property<'s>),
-        Include(Include<'s>),
-        DeletedProp(Input<'s>),
-        DeletedNode(NodeId<'s>),
-    }
-
-    // A node can contain 0+ properties and 0+ child nodes.
-    // To make the parsing easier, wrap them both in a `NodeContent` enum
-    // and split them later in the closure.
-    map(
-        many0(alt((
-            map(inner_node, NodeContent::Node),
-            map(property, NodeContent::Prop),
-            map(include_directive, NodeContent::Include),
-            map(deleted_property, NodeContent::DeletedProp),
-            map(deleted_node, NodeContent::DeletedNode),
-        ))),
-        |contents| {
-            contents
-                .into_iter()
-                .fold(NodeContents::default(), |mut contents, elem| {
-                    match elem {
-                        NodeContent::Prop(p) => contents.props.push(p),
-                        NodeContent::Node(c) => contents.children.push(c),
-                        NodeContent::Include(inc) => contents.includes.push(inc),
-                        NodeContent::DeletedProp(c) => {
-                            contents.deleted_props.push(str::from_utf8(c).unwrap())
-                        }
-                        NodeContent::DeletedNode(c) => contents.deleted_nodes.push(c),
-                    };
-                    contents
-                })
+fn node_contents<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Vec<NodeItem>, E> {
+    fold_many0(
+        alt((
+            map(include_directive, NodeItem::Include),
+            map(inner_node, NodeItem::ChildNode),
+            map(property, NodeItem::Property),
+            map(deleted_property, |s| {
+                NodeItem::DeletedProp(str::from_utf8(s).unwrap())
+            }),
+            map(deleted_node, NodeItem::DeletedNode),
+        )),
+        Vec::new,
+        |mut items, item| {
+            items.push(item);
+            items
         },
     )(input)
 }
@@ -988,19 +960,16 @@ mod tests {
 
         let exp = Node {
             id: NodeId::Name("/", None),
-            contents: NodeContents {
-                props: vec![
-                    Property {
-                        name: "#address-cells",
-                        value: Some(vec![CellArray(vec![Expr(Lit(Num(2)))])]),
-                    },
-                    Property {
-                        name: "#size-cells",
-                        value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
-                    },
-                ],
-                ..Default::default()
-            },
+            contents: vec![
+                NodeItem::Property(Property {
+                    name: "#address-cells",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(2)))])]),
+                }),
+                NodeItem::Property(Property {
+                    name: "#size-cells",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
+                }),
+            ],
             ..Default::default()
         };
 
@@ -1046,103 +1015,105 @@ mod tests {
             };
     "#;
 
+        let l2_0 = Node {
+            id: NodeId::Name("l2-cache", None),
+            labels: vec!["L2_0"],
+            contents: vec![Property {
+                name: "compatible",
+                value: Some(vec![Str("cache")]),
+            }
+            .into()],
+            ..Default::default()
+        };
+
+        let l2_1 = Node {
+            id: NodeId::Name("l2-cache", None),
+            labels: vec!["L2", "L2_1"],
+            contents: vec![Property {
+                name: "compatible",
+                value: Some(vec![Str("cache")]),
+            }
+            .into()],
+            ..Default::default()
+        };
+
+        let cpu_0 = Node {
+            id: NodeId::Name("cpu", Some("0")),
+            contents: vec![
+                Property {
+                    name: "device_type",
+                    value: Some(vec![Str("cpu")]),
+                }
+                .into(),
+                Property {
+                    name: "reg",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
+                }
+                .into(),
+                Property {
+                    name: "cache-unified",
+                    value: None,
+                }
+                .into(),
+                Property {
+                    name: "cache-size",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0x8000)))])]),
+                }
+                .into(),
+                Property {
+                    name: "cache-block-size",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(32)))])]),
+                }
+                .into(),
+                Property {
+                    name: "timebase-frequency",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(82_500_000)))])]),
+                }
+                .into(),
+                Property {
+                    name: "next-level-cache",
+                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference("L2_0"))])]),
+                }
+                .into(),
+                l2_0.into(),
+            ],
+            ..Default::default()
+        };
+
+        let cpu_1 = Node {
+            id: NodeId::Name("cpu", Some("1")),
+            contents: vec![
+                Property {
+                    name: "device_type",
+                    value: Some(vec![Str("cpu")]),
+                }
+                .into(),
+                Property {
+                    name: "reg",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
+                }
+                .into(),
+                l2_1.into(),
+            ],
+            ..Default::default()
+        };
+
         let exp = Node {
             id: NodeId::Name("cpus", None),
-            contents: NodeContents {
-                props: vec![
-                    Property {
-                        name: "#address-cells",
-                        value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
-                    },
-                    Property {
-                        name: "#size-cells",
-                        value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
-                    },
-                ],
-                children: vec![
-                    Node {
-                        id: NodeId::Name("cpu", Some("0")),
-                        contents: NodeContents {
-                            props: vec![
-                                Property {
-                                    name: "device_type",
-                                    value: Some(vec![Str("cpu")]),
-                                },
-                                Property {
-                                    name: "reg",
-                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
-                                },
-                                Property {
-                                    name: "cache-unified",
-                                    value: None,
-                                },
-                                Property {
-                                    name: "cache-size",
-                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0x8000)))])]),
-                                },
-                                Property {
-                                    name: "cache-block-size",
-                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(32)))])]),
-                                },
-                                Property {
-                                    name: "timebase-frequency",
-                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(82_500_000)))])]),
-                                },
-                                Property {
-                                    name: "next-level-cache",
-                                    value: Some(vec![CellArray(vec![PropertyCell::Ref(
-                                        Reference("L2_0"),
-                                    )])]),
-                                },
-                            ],
-                            children: vec![Node {
-                                id: NodeId::Name("l2-cache", None),
-                                labels: vec!["L2_0"],
-                                contents: NodeContents {
-                                    props: vec![Property {
-                                        name: "compatible",
-                                        value: Some(vec![Str("cache")]),
-                                    }],
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }],
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    Node {
-                        id: NodeId::Name("cpu", Some("1")),
-                        contents: NodeContents {
-                            props: vec![
-                                Property {
-                                    name: "device_type",
-                                    value: Some(vec![Str("cpu")]),
-                                },
-                                Property {
-                                    name: "reg",
-                                    value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
-                                },
-                            ],
-                            children: vec![Node {
-                                id: NodeId::Name("l2-cache", None),
-                                labels: vec!["L2", "L2_1"],
-                                contents: NodeContents {
-                                    props: vec![Property {
-                                        name: "compatible",
-                                        value: Some(vec![Str("cache")]),
-                                    }],
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }],
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
+            contents: vec![
+                Property {
+                    name: "#address-cells",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
+                }
+                .into(),
+                Property {
+                    name: "#size-cells",
+                    value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
+                }
+                .into(),
+                cpu_0.into(),
+                cpu_1.into(),
+            ],
             ..Default::default()
         };
 

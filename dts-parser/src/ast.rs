@@ -27,8 +27,8 @@ pub enum DtsVersion {
 pub struct Node<'s> {
     pub id: NodeId<'s>,
     pub labels: Vec<&'s str>,
-    pub contents: NodeContents<'s>,
-    pub omit_if_no_ref: bool,
+    pub contents: Vec<NodeItem<'s>>,
+    pub ommittable: bool,
 }
 
 impl<'s> Default for Node<'s> {
@@ -37,7 +37,7 @@ impl<'s> Default for Node<'s> {
             id: NodeId::Name("", None),
             labels: Default::default(),
             contents: Default::default(),
-            omit_if_no_ref: Default::default(),
+            ommittable: Default::default(),
         }
     }
 }
@@ -51,13 +51,31 @@ pub enum NodeId<'s> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reference<'s>(pub &'s str);
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct NodeContents<'s> {
-    pub includes: Vec<Include<'s>>,
-    pub props: Vec<Property<'s>>,
-    pub children: Vec<Node<'s>>,
-    pub deleted_props: Vec<&'s str>,
-    pub deleted_nodes: Vec<NodeId<'s>>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeItem<'s> {
+    Include(Include<'s>),
+    Property(Property<'s>),
+    ChildNode(Node<'s>),
+    DeletedProp(&'s str),
+    DeletedNode(NodeId<'s>),
+}
+
+impl<'s> From<Include<'s>> for NodeItem<'s> {
+    fn from(i: Include<'s>) -> Self {
+        Self::Include(i)
+    }
+}
+
+impl<'s> From<Property<'s>> for NodeItem<'s> {
+    fn from(p: Property<'s>) -> Self {
+        Self::Property(p)
+    }
+}
+
+impl<'s> From<Node<'s>> for NodeItem<'s> {
+    fn from(n: Node<'s>) -> Self {
+        Self::ChildNode(n)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
