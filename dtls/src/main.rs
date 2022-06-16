@@ -18,11 +18,14 @@ fn main() {
         buf
     };
 
-    match dts_parser::from_str(source.as_str()) {
-        Ok(ast) => println!("{:#?}", ast),
-        Err(e) => {
-            eprintln!("Errors: {:#?}", e);
-            process::exit(-1);
+    let (ast, errors) = dts_parser::from_str(source.as_str());
+
+    println!("{:?}", ast);
+
+    if !errors.is_empty() {
+        for error in errors {
+            eprintln!("ERROR: {:?}", error);
         }
+        process::exit(1);
     }
 }

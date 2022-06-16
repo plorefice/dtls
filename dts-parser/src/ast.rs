@@ -1,5 +1,11 @@
+pub use errors::*;
+pub use parser::*;
+
+mod errors;
+mod parser;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Root(pub(crate) Vec<RootItem>);
+pub struct Root(Vec<RootItem>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RootItem {
@@ -25,10 +31,10 @@ pub enum DtsVersion {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
-    pub id: NodeId,
-    pub labels: Vec<String>,
-    pub contents: Vec<NodeItem>,
-    pub ommittable: bool,
+    id: NodeId,
+    labels: Vec<String>,
+    contents: Vec<NodeItem>,
+    ommittable: bool,
 }
 
 impl Default for Node {
@@ -49,7 +55,7 @@ pub enum NodeId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reference(pub String);
+pub struct Reference(String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeItem {
@@ -58,6 +64,7 @@ pub enum NodeItem {
     ChildNode(Node),
     DeletedProp(String),
     DeletedNode(NodeId),
+    Invalid,
 }
 
 impl From<Include> for NodeItem {
@@ -80,8 +87,8 @@ impl From<Node> for NodeItem {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
-    pub name: String,
-    pub value: Option<Vec<PropertyValue>>,
+    name: String,
+    value: Option<Vec<PropertyValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -14,32 +14,46 @@ use nom::{
 };
 use nom_locate::LocatedSpan;
 
-use crate::ast::*;
+use crate::ast::{
+    errors::{expect, Error},
+    *,
+};
+
+pub(super) type Input<'a> = Span<'a>;
+
+pub(super) type Span<'a> = LocatedSpan<&'a [u8], State<'a>>;
+
+pub(super) type IResult<'a, T> = nom::IResult<Input<'a>, T>;
 
 #[derive(Clone, Debug)]
-struct State<'a>(&'a RefCell<Vec<Error>>);
+pub(super) struct State<'a>(&'a RefCell<Vec<Error>>);
 
-#[derive(Debug)]
-pub struct Error(Range<usize>, String);
+impl<'a> State<'a> {
+    pub fn report_error(&self, error: Error) {
+        self.0.borrow_mut().push(error);
+    }
+}
 
-type Span<'a> = LocatedSpan<&'a [u8], State<'a>>;
+pub(super) trait ToRange {
+    fn to_range(&self) -> Range<usize>;
+}
 
-type Input<'a> = Span<'a>;
-
-type IResult<'a, T> = nom::IResult<Input<'a>, T>;
+impl ToRange for Span<'_> {
+    fn to_range(&self) -> Range<usize> {
+        let start = self.location_offset();
+        let end = start + self.fragment().len();
+        start..end
+    }
+}
 
 /// Parse a Device Tree from a string.
-pub fn from_str(s: &str) -> Result<Root, Vec<Error>> {
+pub fn from_str(s: &str) -> (Root, Vec<Error>) {
     let errors = RefCell::new(Vec::new());
     let input = Span::new_extra(s.as_bytes(), State(&errors));
 
     let (_, root) = all_consuming(root)(input).expect("parser should never fail");
-    let errors = errors.into_inner();
 
-    match &errors[..] {
-        [] => Ok(root),
-        _ => Err(errors),
-    }
+    (root, errors.into_inner())
 }
 
 /// Parse a Device Tree source file.
@@ -160,7 +174,9 @@ fn node_contents(input: Input) -> IResult<Vec<NodeItem>> {
         alt((
             map(include_directive, NodeItem::Include),
             map(inner_node, NodeItem::ChildNode),
-            map(property, NodeItem::Property),
+            map(property, |p| {
+                p.map(NodeItem::Property).unwrap_or(NodeItem::Invalid)
+            }),
             map(deleted_property, |s| {
                 NodeItem::DeletedProp(String::from_utf8(s.fragment().to_vec()).unwrap())
             }),
@@ -175,18 +191,22 @@ fn node_contents(input: Input) -> IResult<Vec<NodeItem>> {
 }
 
 /// Parse a node property.
-fn property(input: Input) -> IResult<Property> {
-    map(
-        tuple((
-            prop_name,
-            opt(preceded(assignment, cut(prop_values))),
-            cut(terminator),
+fn property(input: Input) -> IResult<Option<Property>> {
+    let property = tuple((
+        prop_name,
+        opt(preceded(
+            expect(assignment, "missing '='"),
+            expect(prop_values, "expected property value"),
         )),
-        |(name, value, _)| Property {
+        expect(terminator, "missing ';'"),
+    ));
+
+    map(property, |(name, value, _)| {
+        value.map(|value| Property {
             name: String::from_utf8(name.fragment().to_vec()).unwrap(),
             value,
-        },
-    )(input)
+        })
+    })(input)
 }
 
 /// Parse a propery name.
@@ -924,7 +944,7 @@ mod tests {
             let errs = RefCell::default();
             let s = Span::new_extra(input.as_bytes(), State(&errs));
 
-            assert_eq!(exp, all_consuming(property)(s).unwrap().1,);
+            assert_eq!(Some(exp), all_consuming(property)(s).unwrap().1,);
         }
     }
 
