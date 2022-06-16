@@ -250,7 +250,7 @@ fn prop_value_bits<'a, E: ParseError<Input<'a>>>(
         tuple((
             bits_keyword,
             cut(dec),
-            cut(delimited(left_chevron, many1(integer_expr), right_chevron)),
+            cut(delimited(left_chevron, many1(expression), right_chevron)),
         )),
         |(_, n, bits)| PropertyValue::Bits(n as u32, bits),
     )(input)
@@ -308,7 +308,7 @@ fn prop_cell_ref<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
 
 /// Parse a property cell containing an integer expression.
 fn prop_cell_expr<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyCell, E> {
-    lexeme(map(integer_expr, PropertyCell::Expr))(input)
+    lexeme(map(expression, PropertyCell::Expr))(input)
 }
 
 /// Parse a deleted node.
@@ -389,29 +389,23 @@ fn node_address_identifier<'a, E: ParseError<Input<'a>>>(
 ///
 /// Valid expressions include a single integer literal (e.g. `<0>`) or a parenthesized expression
 /// (e.g. `<(1 << 1)>`).
-fn integer_expr<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
-    alt((integer_expr_lit, integer_expr_parens))(input)
+fn expression<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+    alt((expression_lit, expression_parens))(input)
 }
 
 /// Parse a valid integer literal expression in a property cell.
-fn integer_expr_lit<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
-    map(integer_literal, IntegerExpression::Lit)(input)
+fn expression_lit<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+    map(integer_literal, Expression::Lit)(input)
 }
 
 /// Parse a valid parenthesized integer expression in a property cell.
 ///
 /// Parenthesized expressions may contain a single term or an inner parenthesized expression.
-fn integer_expr_parens<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
+fn expression_parens<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
     preceded(
         left_paren,
         cut(terminated(
-            alt((integer_expr_term, integer_expr_parens)),
+            alt((expression_term, expression_parens)),
             right_paren,
         )),
     )(input)
@@ -421,36 +415,31 @@ fn integer_expr_parens<'a, E: ParseError<Input<'a>>>(
 ///
 /// A term may be a single integer literal, a binary operator applied to two terms
 /// or a unary operator applied to a single term.
-fn integer_expr_term<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
-    alt((integer_expr_binary, integer_expr_unary, integer_expr_lit))(input)
+fn expression_term<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+    alt((expression_binary, expression_unary, expression_lit))(input)
 }
 
 /// Parse a valid binary integer expression term in a property cell.
-fn integer_expr_binary<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
+fn expression_binary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
     map(
         tuple((
-            integer_expr,
+            expression,
             arith_operator_binary,
-            cut(alt((integer_expr_term, integer_expr_parens))),
+            cut(alt((expression_term, expression_parens))),
         )),
-        |(left, op, right)| IntegerExpression::Binary(Box::new(left), op, Box::new(right)),
+        |(left, op, right)| Expression::Binary(Box::new(left), op, Box::new(right)),
     )(input)
 }
 
 /// Parse a valid unary integer expression term in a property cell.
-fn integer_expr_unary<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
+fn expression_unary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
     map(
-        tuple((arith_operator_unary, cut(integer_expr))),
-        |(op, right)| IntegerExpression::Unary(op, Box::new(right)),
+        tuple((arith_operator_unary, cut(expression))),
+        |(op, right)| Expression::Unary(op, Box::new(right)),
     )(input)
 }
 
+/// Parse an integer literal valid in the context of an expression.
 fn integer_literal<'a, E: ParseError<Input<'a>>>(
     input: Input<'a>,
 ) -> IResult<'a, IntegerLiteral, E> {
@@ -861,7 +850,7 @@ mod tests {
 
     #[test]
     fn parse_properties() {
-        use IntegerExpression::*;
+        use Expression::*;
         use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;
@@ -967,7 +956,7 @@ mod tests {
 
     #[test]
     fn parse_root_node() {
-        use IntegerExpression::*;
+        use Expression::*;
         use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;
@@ -1000,7 +989,7 @@ mod tests {
 
     #[test]
     fn parse_inner_node() {
-        use IntegerExpression::*;
+        use Expression::*;
         use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;

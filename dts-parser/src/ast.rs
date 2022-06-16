@@ -82,24 +82,20 @@ pub enum PropertyValue<'s> {
     Ref(Reference<'s>),
     Bytestring(Vec<u8>),
     CellArray(Vec<PropertyCell<'s>>),
-    Bits(u32, Vec<IntegerExpression>),
+    Bits(u32, Vec<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropertyCell<'s> {
     Ref(Reference<'s>),
-    Expr(IntegerExpression),
+    Expr(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IntegerExpression {
+pub enum Expression {
     Lit(IntegerLiteral),
-    Unary(UnaryOperator, Box<IntegerExpression>),
-    Binary(
-        Box<IntegerExpression>,
-        BinaryOperator,
-        Box<IntegerExpression>,
-    ),
+    Unary(UnaryOperator, Box<Expression>),
+    Binary(Box<Expression>, BinaryOperator, Box<Expression>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
