@@ -1,4 +1,4 @@
-use std::str;
+use std::{cell::RefCell, ops::Range, str};
 
 use nom::{
     branch::alt,
@@ -8,26 +8,37 @@ use nom::{
         u64,
     },
     combinator::{all_consuming, cut, map, opt, recognize},
-    error::Error,
     multi::{fold_many0, many0, many1, many_m_n, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
-    AsChar, Finish,
+    AsChar,
 };
 use nom_locate::LocatedSpan;
 
 use crate::ast::*;
 
-type Span<'a> = LocatedSpan<&'a [u8]>;
+#[derive(Clone, Debug)]
+struct State<'a>(&'a RefCell<Vec<Error>>);
+
+#[derive(Debug)]
+pub struct Error(Range<usize>, String);
+
+type Span<'a> = LocatedSpan<&'a [u8], State<'a>>;
+
 type Input<'a> = Span<'a>;
+
 type IResult<'a, T> = nom::IResult<Input<'a>, T>;
 
 /// Parse a Device Tree from a string.
-pub fn from_str(s: &str) -> Result<Root, Error<Input>> {
-    let input = Span::new(s.as_bytes());
+pub fn from_str(s: &str) -> Result<Root, Vec<Error>> {
+    let errors = RefCell::new(Vec::new());
+    let input = Span::new_extra(s.as_bytes(), State(&errors));
 
-    match all_consuming(root)(input).finish() {
-        Ok((_, dts)) => Ok(dts),
-        Err(e) => Err(e),
+    let (_, root) = all_consuming(root)(input).expect("parser should never fail");
+    let errors = errors.into_inner();
+
+    match &errors[..] {
+        [] => Ok(root),
+        _ => Err(errors),
     }
 }
 
@@ -728,36 +739,21 @@ fn line_comment(input: Input) -> IResult<Input> {
 
 #[cfg(test)]
 mod tests {
+    use nom::Finish;
+
     use super::*;
 
     #[test]
     fn parse_escaped_strings() {
         for (input, exp) in [(r#""Escaped string: \"\\\"""#, r#"Escaped string: \"\\\""#)] {
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
             assert_eq!(
                 &exp.as_bytes(),
-                all_consuming(string_literal)(input.as_bytes().into())
-                    .unwrap()
-                    .1
-                    .fragment()
+                all_consuming(string_literal)(s).unwrap().1.fragment()
             );
         }
-    }
-
-    #[test]
-    fn parse_line_comments() {
-        let (_, res) =
-            all_consuming(line_comment)((&b"// This is a comment\n"[..]).into()).unwrap();
-        assert_eq!(res.fragment().to_vec(), b"// This is a comment\n");
-
-        let (rest, res) =
-            line_comment((&b"// Multiline comments\nare not supported"[..]).into()).unwrap();
-
-        assert_eq!(res.fragment().to_vec(), b"// Multiline comments\n");
-        assert_eq!(rest.fragment().to_vec(), b"are not supported");
-
-        assert!(
-            line_comment((&br#"prop-name = "value"; // This is a comment"#[..]).into()).is_err()
-        );
     }
 
     #[test]
@@ -780,29 +776,29 @@ mod tests {
                 NodeId::Name("uart".to_string(), Some("fe001000".to_string())),
             ),
         ] {
-            assert_eq!(
-                exp,
-                all_consuming(node_name)(input.as_bytes().into()).unwrap().1,
-            );
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+            assert_eq!(exp, all_consuming(node_name)(s).unwrap().1,);
         }
     }
 
     #[test]
     fn parse_node_labels() {
-        for label in ["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"] {
+        for input in ["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"] {
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
             assert_eq!(
-                &label.as_bytes(),
-                all_consuming(node_label)(label.as_bytes().into())
-                    .unwrap()
-                    .1
-                    .fragment()
+                &input.as_bytes(),
+                all_consuming(node_label)(s).unwrap().1.fragment()
             );
         }
     }
 
     #[test]
     fn parse_prop_names() {
-        for name in [
+        for input in [
             "reg",
             "status",
             "compatible",
@@ -814,12 +810,12 @@ mod tests {
             "ibm,ppc-interrupt-server#s",
             "linux,network-index",
         ] {
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
             assert_eq!(
-                &name.as_bytes(),
-                all_consuming(prop_name)(name.as_bytes().into())
-                    .unwrap()
-                    .1
-                    .fragment()
+                &input.as_bytes(),
+                all_consuming(prop_name)(s).unwrap().1.fragment()
             );
         }
     }
@@ -925,10 +921,10 @@ mod tests {
                 },
             ),
         ] {
-            assert_eq!(
-                exp,
-                all_consuming(property)(input.as_bytes().into()).unwrap().1,
-            );
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+            assert_eq!(exp, all_consuming(property)(s).unwrap().1,);
         }
     }
 
@@ -956,10 +952,10 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(
-            exp,
-            all_consuming(root_node)(input.as_bytes().into()).unwrap().1,
-        );
+        let errs = RefCell::default();
+        let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+        assert_eq!(exp, all_consuming(root_node)(s).unwrap().1,);
     }
 
     #[test]
@@ -1102,12 +1098,10 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(
-            exp,
-            all_consuming(inner_node)(input.as_bytes().into())
-                .unwrap()
-                .1,
-        );
+        let errs = RefCell::default();
+        let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+        assert_eq!(exp, all_consuming(inner_node)(s).unwrap().1,);
     }
 
     #[test]
@@ -1138,12 +1132,10 @@ mod tests {
                 Include::C("inner/sample.dtsi".to_string()),
             ),
         ] {
-            assert_eq!(
-                exp,
-                all_consuming(include_directive)(input.as_bytes().into())
-                    .unwrap()
-                    .1,
-            );
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+            assert_eq!(exp, all_consuming(include_directive)(s).unwrap().1,);
         }
     }
 
@@ -1157,7 +1149,10 @@ mod tests {
             ("/delete-property foo,bar;", None),
             ("foo,bar;", None),
         ] {
-            match deleted_property(input.as_bytes().into()) {
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+            match deleted_property(s) {
                 Ok((rest, res)) => {
                     assert!(rest.is_empty());
                     assert_eq!(res.fragment(), &exp.unwrap().as_bytes());
@@ -1183,7 +1178,10 @@ mod tests {
                 Some(NodeId::Ref(Reference("baz".to_string()))),
             ),
         ] {
-            match deleted_node(input.as_bytes().into()) {
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+            match deleted_node(s) {
                 Ok((rest, res)) => {
                     assert!(rest.is_empty());
                     assert_eq!(res, exp.unwrap());
@@ -1204,7 +1202,10 @@ mod tests {
             ("/memreserve/;", None),
             ("/memreserve/", None),
         ] {
-            match memreserve(input.as_bytes().into()) {
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+            match memreserve(s) {
                 Ok((rest, res)) => {
                     assert!(rest.is_empty());
                     assert_eq!(res, exp.unwrap());
@@ -1230,7 +1231,10 @@ mod tests {
                 Some(NodeId::Ref(Reference("baz".to_string()))),
             ),
         ] {
-            match omit_if_no_ref(input.as_bytes().into()) {
+            let errs = RefCell::default();
+            let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+            match omit_if_no_ref(s) {
                 Ok((rest, res)) => {
                     assert!(rest.is_empty());
                     assert_eq!(res, exp.unwrap());
@@ -1253,7 +1257,10 @@ mod tests {
             }),
         ]);
 
-        assert_eq!(exp, all_consuming(root)(input.as_bytes().into()).unwrap().1,);
+        let errs = RefCell::default();
+        let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+        assert_eq!(exp, all_consuming(root)(s).unwrap().1,);
     }
 
     #[test]
@@ -1267,7 +1274,10 @@ mod tests {
                             0
             )"#;
 
-        match expression(input.as_bytes().into()).finish() {
+        let errs = RefCell::default();
+        let s = Span::new_extra(input.as_bytes(), State(&errs));
+
+        match expression(s).finish() {
             Ok((rest, _)) => assert!(rest.is_empty()),
             Err(e) => panic!("{}", std::str::from_utf8(e.input.fragment()).unwrap()),
         }
@@ -1375,8 +1385,11 @@ mod tests {
 /delete-node/ &pioC;
 "#;
 
+        let errs = RefCell::default();
+        let s = Span::new_extra(input.as_bytes(), State(&errs));
+
         // Someday I'll write a proper test for the above file...
-        let (rest, _) = root(input.as_bytes().into()).unwrap();
+        let (rest, _) = root(s).unwrap();
         assert!(rest.is_empty());
     }
 }
