@@ -8,23 +8,23 @@ use nom::{
         u64,
     },
     combinator::{all_consuming, cut, map, opt, recognize},
-    error::{convert_error, ParseError, VerboseError},
+    error::ParseError,
     multi::{many0, many1, many_m_n, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
-    Finish,
+    AsChar, Finish,
 };
 
 use crate::ast::*;
 
-type Input<'a> = &'a str;
+type Input<'a> = &'a [u8];
 
 type IResult<'a, T, E> = nom::IResult<Input<'a>, T, E>;
 
 /// Parse a Device Tree from a string.
-pub fn from_str(s: &str) -> Result<Dts, String> {
-    match all_consuming(dts_file::<VerboseError<&str>>)(s).finish() {
+pub fn from_str(s: &str) -> Result<Dts, nom::error::Error<Input>> {
+    match all_consuming(dts_file)(s.as_bytes()).finish() {
         Ok((_, dts)) => Ok(dts),
-        Err(e) => Err(convert_error(s, e)),
+        Err(e) => Err(e),
     }
 }
 
@@ -35,7 +35,7 @@ where
 {
     enum TopLevelContents<'s> {
         Node(Node<'s>),
-        Include(&'s str),
+        Include(Input<'s>),
         VersionDirective,
         DeletedNodeDirective(NodeId<'s>),
         OmitIfNoRefDirective(NodeId<'s>),
@@ -66,7 +66,7 @@ where
             for content in contents {
                 match content {
                     TopLevelContents::Node(node) => dts.nodes.push(node),
-                    TopLevelContents::Include(inc) => dts.includes.push(inc),
+                    TopLevelContents::Include(e) => dts.includes.push(str::from_utf8(e).unwrap()),
                     TopLevelContents::VersionDirective => dts.version = DtsVersion::V1,
                     TopLevelContents::DeletedNodeDirective(n) => dts.deleted_nodes.push(n),
                     TopLevelContents::OmitIfNoRefDirective(n) => dts.omitted_nodes.push(n),
@@ -99,7 +99,7 @@ where
     map(
         tuple((root_node_name, node_body, cut(terminator))),
         |(name, contents, _)| Node {
-            id: NodeId::Name(name, None),
+            id: NodeId::Name(str::from_utf8(name).unwrap(), None),
             contents,
             ..Default::default()
         },
@@ -124,7 +124,10 @@ where
         )),
         |(omit, labels, reference, contents, _)| Node {
             id: NodeId::Ref(reference),
-            labels,
+            labels: labels
+                .into_iter()
+                .map(|s| str::from_utf8(s).unwrap())
+                .collect(),
             contents,
             omit_if_no_ref: omit.is_some(),
         },
@@ -148,7 +151,10 @@ where
         )),
         |(omit, labels, name, contents, _)| Node {
             id: name,
-            labels,
+            labels: labels
+                .into_iter()
+                .map(|s| str::from_utf8(s).unwrap())
+                .collect(),
             contents,
             omit_if_no_ref: omit.is_some(),
         },
@@ -172,7 +178,7 @@ where
 }
 
 /// Parse a list of node labels.
-fn node_labels<'a, E>(input: Input<'a>) -> IResult<'a, Vec<&'a str>, E>
+fn node_labels<'a, E>(input: Input<'a>) -> IResult<'a, Vec<Input<'a>>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -195,8 +201,8 @@ where
     enum NodeContent<'s> {
         Node(Node<'s>),
         Prop(Property<'s>),
-        Include(&'s str),
-        DeletedProp(&'s str),
+        Include(Input<'s>),
+        DeletedProp(Input<'s>),
         DeletedNode(NodeId<'s>),
     }
 
@@ -218,8 +224,12 @@ where
                     match elem {
                         NodeContent::Prop(p) => contents.props.push(p),
                         NodeContent::Node(c) => contents.children.push(c),
-                        NodeContent::Include(c) => contents.includes.push(c),
-                        NodeContent::DeletedProp(c) => contents.deleted_props.push(c),
+                        NodeContent::Include(c) => {
+                            contents.includes.push(str::from_utf8(c).unwrap())
+                        }
+                        NodeContent::DeletedProp(c) => {
+                            contents.deleted_props.push(str::from_utf8(c).unwrap())
+                        }
                         NodeContent::DeletedNode(c) => contents.deleted_nodes.push(c),
                     };
                     contents
@@ -239,7 +249,10 @@ where
             opt(preceded(assignment, cut(prop_values))),
             cut(terminator),
         )),
-        |(name, value, _)| Property { name, value },
+        |(name, value, _)| Property {
+            name: str::from_utf8(name).unwrap(),
+            value,
+        },
     )(input)
 }
 
@@ -300,7 +313,9 @@ fn prop_value_str<'a, E>(input: Input<'a>) -> IResult<'a, PropertyValue, E>
 where
     E: ParseError<Input<'a>>,
 {
-    lexeme(map(string_literal, PropertyValue::Str))(input)
+    lexeme(map(string_literal, |s: Input| {
+        PropertyValue::Str(str::from_utf8(s).unwrap())
+    }))(input)
 }
 
 /// Parse a property value corresponding to a cell array.
@@ -401,10 +416,15 @@ fn node_reference<'a, E>(input: Input<'a>) -> IResult<'a, Reference, E>
 where
     E: ParseError<Input<'a>>,
 {
-    let node_label = map(node_label_str, Reference);
-    let node_path = map(delimited(braces_start, node_path, braces_end), Reference);
+    let node_ref = map(
+        alt((
+            node_label_str,
+            delimited(braces_start, node_path, braces_end),
+        )),
+        |s: Input| Reference(str::from_utf8(s).unwrap()),
+    );
 
-    preceded(reference_operator, cut(alt((node_label, node_path))))(input)
+    preceded(reference_operator, cut(node_ref))(input)
 }
 
 /// Parse a valid node name.
@@ -416,7 +436,12 @@ where
 {
     map(
         tuple((node_name_identifier, opt(node_address_identifier))),
-        |(name, address)| NodeId::Name(name, address),
+        |(name, address)| {
+            NodeId::Name(
+                str::from_utf8(name).unwrap(),
+                address.map(|s| str::from_utf8(s).unwrap()),
+            )
+        },
     )(input)
 }
 
@@ -724,7 +749,11 @@ where
 {
     map(
         preceded(alt((tag("0x"), tag("0X"))), cut(hex_digit1)),
-        |s: &str| u64::from_str_radix(s, 16).unwrap(),
+        |s: Input| {
+            // SAFETY: The input is guaranteed to be a valid hex string.
+            let s = unsafe { str::from_utf8_unchecked(s) };
+            u64::from_str_radix(s, 16).unwrap()
+        },
     )(input)
 }
 
@@ -749,9 +778,14 @@ fn hex_byte<'a, E>(input: Input<'a>) -> IResult<'a, u8, E>
 where
     E: ParseError<Input<'a>>,
 {
-    map(take_while_m_n(2, 2, |c: char| c.is_digit(16)), |s: &str| {
-        u8::from_str_radix(s, 16).unwrap()
-    })(input)
+    map(
+        take_while_m_n(2, 2, |c: u8| c.is_hex_digit()),
+        |s: Input| {
+            // SAFETY: The input is guaranteed to be a valid hex string.
+            let s = unsafe { str::from_utf8_unchecked(s) };
+            u8::from_str_radix(s, 16).unwrap()
+        },
+    )(input)
 }
 
 /// Recognize a sequence of printable ASCII characters.
@@ -873,10 +907,10 @@ where
 
 /// Parse a lexeme using the combinator passed as its argument,
 /// also consuming any whitespaces or comments before or after.
-fn lexeme<'a, O, F, E>(f: F) -> impl FnMut(&'a str) -> IResult<'a, O, E>
+fn lexeme<'a, O, F, E>(f: F) -> impl FnMut(Input<'a>) -> IResult<'a, O, E>
 where
     E: ParseError<Input<'a>>,
-    F: FnMut(&'a str) -> IResult<'a, O, E>,
+    F: FnMut(Input<'a>) -> IResult<'a, O, E>,
 {
     delimited(ws, f, ws)
 }
@@ -913,36 +947,32 @@ where
 mod tests {
     use super::*;
 
-    use nom::{
-        error::{convert_error, VerboseError},
-        Finish,
-    };
+    use nom::error::Error;
 
     #[test]
     fn parse_escaped_strings() {
-        for (input, exp) in [(r#""Escaped string: \"\\\"""#, r#"Escaped string: \"\\\""#)] {
-            match string_literal::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", exp)),
-                Err(e) => panic!("{}", convert_error(input, e)),
-            }
+        for (input, exp) in [(
+            &br#""Escaped string: \"\\\"""#[..],
+            &br#"Escaped string: \"\\\""#[..],
+        )] {
+            assert_eq!(string_literal::<Error<Input>>(input), Ok((&b""[..], exp)));
         }
     }
 
     #[test]
     fn parse_line_comments() {
         assert_eq!(
-            line_comment::<VerboseError<&str>>("// This is a comment\n"),
-            Ok(("", "// This is a comment\n"))
+            line_comment::<Error<Input>>(b"// This is a comment\n"),
+            Ok((&b""[..], &b"// This is a comment\n"[..]))
         );
 
         assert_eq!(
-            line_comment::<VerboseError<&str>>("// Multiline comments\nare not supported"),
-            Ok(("are not supported", "// Multiline comments\n"))
+            line_comment::<Error<Input>>(b"// Multiline comments\nare not supported"),
+            Ok((&b"are not supported"[..], &b"// Multiline comments\n"[..]))
         );
 
         assert!(
-            line_comment::<VerboseError<&str>>(r#"prop-name = "value"; // This is a comment"#)
-                .is_err()
+            line_comment::<Error<Input>>(br#"prop-name = "value"; // This is a comment"#).is_err()
         );
     }
 
@@ -957,20 +987,20 @@ mod tests {
             ("memory@0", NodeId::Name("memory", Some("0"))),
             ("uart@fe001000", NodeId::Name("uart", Some("fe001000"))),
         ] {
-            match node_name::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", exp)),
-                Err(e) => panic!("{}", convert_error(input, e),),
-            }
+            assert_eq!(
+                node_name::<Error<Input>>(input.as_bytes()),
+                Ok((&b""[..], exp))
+            );
         }
     }
 
     #[test]
     fn parse_node_labels() {
         for label in ["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"] {
-            match node_label::<VerboseError<&str>>(label).finish() {
-                Ok(res) => assert_eq!(res, ("", label)),
-                Err(e) => panic!("{}", convert_error(label, e),),
-            }
+            assert_eq!(
+                node_label::<Error<Input>>(label.as_bytes()),
+                Ok((&b""[..], label.as_bytes()))
+            );
         }
     }
 
@@ -988,10 +1018,10 @@ mod tests {
             "ibm,ppc-interrupt-server#s",
             "linux,network-index",
         ] {
-            match prop_name::<VerboseError<&str>>(name).finish() {
-                Ok(res) => assert_eq!(res, ("", name)),
-                Err(e) => panic!("{}", convert_error(name, e),),
-            }
+            assert_eq!(
+                prop_name::<Error<Input>>(name.as_bytes()),
+                Ok((&b""[..], name.as_bytes()))
+            );
         }
     }
 
@@ -1094,10 +1124,10 @@ mod tests {
                 },
             ),
         ] {
-            match property::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", (prop))),
-                Err(e) => panic!("{}", convert_error(input, e),),
-            }
+            assert_eq!(
+                property::<Error<Input>>(input.as_bytes()),
+                Ok((&b""[..], prop))
+            );
         }
     }
 
@@ -1128,10 +1158,10 @@ mod tests {
             ..Default::default()
         };
 
-        match root_node::<VerboseError<&str>>(input).finish() {
-            Ok(res) => assert_eq!(res, ("", exp)),
-            Err(e) => panic!("{}", convert_error(input, e)),
-        }
+        assert_eq!(
+            root_node::<Error<Input>>(input.as_bytes()),
+            Ok((&b""[..], exp))
+        );
     }
 
     #[test]
@@ -1142,33 +1172,33 @@ mod tests {
         use PropertyValue::*;
 
         let input = r#"cpus {
-            #address-cells = <1>;
-            #size-cells = <0>;
+                #address-cells = <1>;
+                #size-cells = <0>;
 
-            cpu@0 {
-                device_type = "cpu";
-                reg = <0>;
-                cache-unified;
-                cache-size = <0x8000>; // L1, 32 KB
-                cache-block-size = <32>;
-                timebase-frequency = <82500000>; // 82.5 MHz
-                next-level-cache = <&L2_0>; // phandle to L2
+                cpu@0 {
+                    device_type = "cpu";
+                    reg = <0>;
+                    cache-unified;
+                    cache-size = <0x8000>; // L1, 32 KB
+                    cache-block-size = <32>;
+                    timebase-frequency = <82500000>; // 82.5 MHz
+                    next-level-cache = <&L2_0>; // phandle to L2
 
-                L2_0:l2-cache {
-                    compatible = "cache";
+                    L2_0:l2-cache {
+                        compatible = "cache";
+                    };
+                };
+
+                cpu@1 {
+                    device_type = "cpu";
+                    reg = <1>;
+
+                    L2: L2_1: l2-cache {
+                        compatible = "cache";
+                    };
                 };
             };
-
-            cpu@1 {
-                device_type = "cpu";
-                reg = <1>;
-
-                L2: L2_1: l2-cache {
-                    compatible = "cache";
-                };
-            };
-        };
-"#;
+    "#;
 
         let exp = Node {
             id: NodeId::Name("cpus", None),
@@ -1270,22 +1300,22 @@ mod tests {
             ..Default::default()
         };
 
-        match inner_node::<VerboseError<&str>>(input).finish() {
-            Ok(res) => assert_eq!(res, ("", exp)),
-            Err(e) => panic!("{}", convert_error(input, e)),
-        }
+        assert_eq!(
+            inner_node::<Error<Input>>(input.as_bytes()),
+            Ok((&b""[..], exp))
+        );
     }
 
     #[test]
     fn parse_includes() {
-        for (input, inc) in [
+        for (input, exp) in [
             (r#"/include/ "sama5.dtsi""#, "sama5.dtsi"),
             (r#"/include/ "inner/sample.dtsi""#, "inner/sample.dtsi"),
         ] {
-            match include_directive::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", inc)),
-                Err(e) => panic!("{}", convert_error(input, e)),
-            }
+            assert_eq!(
+                include_directive::<Error<Input>>(input.as_bytes()),
+                Ok((&b""[..], exp.as_bytes()))
+            );
         }
     }
 
@@ -1299,8 +1329,8 @@ mod tests {
             ("/delete-property foo,bar;", None),
             ("foo,bar;", None),
         ] {
-            match deleted_property::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", exp.unwrap())),
+            match deleted_property::<Error<Input>>(input.as_bytes()) {
+                Ok(res) => assert_eq!(res, (&b""[..], exp.unwrap().as_bytes())),
                 Err(_) => assert!(exp.is_none()),
             }
         }
@@ -1316,8 +1346,8 @@ mod tests {
             ),
             ("/delete-node/ &baz;", Some(NodeId::Ref(Reference("baz")))),
         ] {
-            match deleted_node::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", exp.unwrap())),
+            match deleted_node::<Error<Input>>(input.as_bytes()) {
+                Ok(res) => assert_eq!(res, (&b""[..], exp.unwrap())),
                 Err(_) => assert!(exp.is_none()),
             }
         }
@@ -1334,8 +1364,8 @@ mod tests {
             ("/memreserve/;", None),
             ("/memreserve/", None),
         ] {
-            match memreserve::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", exp.unwrap())),
+            match memreserve::<Error<Input>>(input.as_bytes()) {
+                Ok(res) => assert_eq!(res, (&b""[..], exp.unwrap())),
                 Err(_) => assert!(exp.is_none()),
             }
         }
@@ -1354,8 +1384,8 @@ mod tests {
                 Some(NodeId::Ref(Reference("baz"))),
             ),
         ] {
-            match omit_if_no_ref::<VerboseError<&str>>(input).finish() {
-                Ok(res) => assert_eq!(res, ("", exp.unwrap())),
+            match omit_if_no_ref::<Error<Input>>(input.as_bytes()) {
+                Ok(res) => assert_eq!(res, (&b""[..], exp.unwrap())),
                 Err(_) => assert!(exp.is_none()),
             }
         }
@@ -1374,10 +1404,10 @@ mod tests {
             ..Default::default()
         };
 
-        match dts_file::<VerboseError<&str>>(input).finish() {
-            Ok(res) => assert_eq!(res, ("", exp)),
-            Err(e) => panic!("{}", convert_error(input, e)),
-        }
+        assert_eq!(
+            dts_file::<Error<Input>>(input.as_bytes()),
+            Ok((&b""[..], exp))
+        );
     }
 
     #[test]
@@ -1421,7 +1451,7 @@ mod tests {
     gpio@101f3000 {
         compatible = "arm,pl061";
         reg = <0x101f3000 0x1000
-               0x101f4000 0x0010>;
+                0x101f4000 0x0010>;
         interrupts = < 3 0 >;
     };
 
@@ -1444,8 +1474,8 @@ mod tests {
         #address-cells = <2>;
         #size-cells = <1>;
         ranges = <0 0  0x10100000   0x10000     // Chipselect 1, Ethernet
-                  1 0  0x10160000   0x10000     // Chipselect 2, i2c controller
-                  2 0  0x30000000   0x1000000>; // Chipselect 3, NOR Flash
+                    1 0  0x10160000   0x10000     // Chipselect 2, i2c controller
+                    2 0  0x30000000   0x1000000>; // Chipselect 3, NOR Flash
 
         ethernet@0,0 {
             compatible = "smc,smc91c111";
@@ -1483,9 +1513,7 @@ mod tests {
 "#;
 
         // Someday I'll write a proper test for the above file...
-        match dts_file::<VerboseError<&str>>(input).finish() {
-            Ok((rest, _)) => assert!(rest.is_empty()),
-            Err(e) => panic!("{}", convert_error(input, e),),
-        }
+        let (rest, _) = dts_file::<Error<Input>>(input.as_bytes()).unwrap();
+        assert!(rest.is_empty());
     }
 }

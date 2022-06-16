@@ -19,6 +19,6 @@ fn main() {
 
     match dts_parser::from_str(source.as_str()) {
         Ok(ast) => println!("{:?}", ast),
-        Err(e) => panic!("{}", e),
+        Err(e) => panic!("Failed on input: {}", std::str::from_utf8(e.input).unwrap()),
     }
 }
