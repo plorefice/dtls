@@ -9,7 +9,7 @@ use nom::{
     },
     combinator::{all_consuming, cut, map, opt, recognize},
     error::ParseError,
-    multi::{many0, many1, many_m_n, many_till, separated_list1},
+    multi::{fold_many0, many0, many1, many_m_n, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, Finish,
 };
@@ -21,34 +21,25 @@ type Input<'a> = &'a [u8];
 type IResult<'a, T, E> = nom::IResult<Input<'a>, T, E>;
 
 /// Parse a Device Tree from a string.
-pub fn from_str(s: &str) -> Result<Dts, nom::error::Error<Input>> {
-    match all_consuming(dts_file)(s.as_bytes()).finish() {
+pub fn from_str(s: &str) -> Result<Root, nom::error::Error<Input>> {
+    match all_consuming(root)(s.as_bytes()).finish() {
         Ok((_, dts)) => Ok(dts),
         Err(e) => Err(e),
     }
 }
 
 /// Parse a Device Tree source file.
-fn dts_file<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Dts, E> {
-    enum TopLevelContents<'s> {
-        Node(Node<'s>),
-        Include(Include<'s>),
-        VersionDirective,
-        DeletedNodeDirective(NodeId<'s>),
-        OmitIfNoRefDirective(NodeId<'s>),
-        MemreserveDirective((u64, u64)),
-    }
+fn root<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Root, E> {
+    let root_node = map(root_node, RootItem::Node);
+    let node_override = map(node_override, RootItem::Node);
+    let version_directive = map(version_directive, RootItem::Version);
+    let include_directive = map(include_directive, RootItem::Include);
+    let deleted_node_directive = map(deleted_node, RootItem::DeleteNode);
+    let omit_if_no_ref_directive = map(omit_if_no_ref, RootItem::OmitNode);
+    let memreserve_directive = map(memreserve, RootItem::MemReserve);
 
-    let root_node = map(root_node, TopLevelContents::Node);
-    let node_override = map(node_override, TopLevelContents::Node);
-    let version_directive = map(version_directive, |_| TopLevelContents::VersionDirective);
-    let include_directive = map(include_directive, TopLevelContents::Include);
-    let deleted_node_directive = map(deleted_node, TopLevelContents::DeletedNodeDirective);
-    let omit_if_no_ref_directive = map(omit_if_no_ref, TopLevelContents::OmitIfNoRefDirective);
-    let memreserve_directive = map(memreserve, TopLevelContents::MemreserveDirective);
-
-    map(
-        many0(alt((
+    let (input, items) = fold_many0(
+        alt((
             root_node,
             node_override,
             version_directive,
@@ -56,24 +47,15 @@ fn dts_file<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Dts, 
             deleted_node_directive,
             omit_if_no_ref_directive,
             memreserve_directive,
-        ))),
-        move |contents| {
-            let mut dts = Dts::default();
-
-            for content in contents {
-                match content {
-                    TopLevelContents::Node(node) => dts.nodes.push(node),
-                    TopLevelContents::Include(inc) => dts.includes.push(inc),
-                    TopLevelContents::VersionDirective => dts.version = DtsVersion::V1,
-                    TopLevelContents::DeletedNodeDirective(n) => dts.deleted_nodes.push(n),
-                    TopLevelContents::OmitIfNoRefDirective(n) => dts.omitted_nodes.push(n),
-                    TopLevelContents::MemreserveDirective(m) => dts.memreserves.push(m),
-                }
-            }
-
-            dts
+        )),
+        Vec::new,
+        move |mut items, item| {
+            items.push(item);
+            items
         },
-    )(input)
+    )(input)?;
+
+    Ok((input, Root(items)))
 }
 
 /// Parse a version directive.
@@ -1272,19 +1254,16 @@ mod tests {
     fn parse_multiple_version_directives() {
         let input = r#"/dts-v1/; /dts-v1/; / { };"#;
 
-        let exp = Dts {
-            version: DtsVersion::V1,
-            nodes: vec![Node {
+        let exp = Root(vec![
+            RootItem::Version(DtsVersion::V1),
+            RootItem::Version(DtsVersion::V1),
+            RootItem::Node(Node {
                 id: NodeId::Name("/", None),
                 ..Default::default()
-            }],
-            ..Default::default()
-        };
+            }),
+        ]);
 
-        assert_eq!(
-            dts_file::<Error<Input>>(input.as_bytes()),
-            Ok((&b""[..], exp))
-        );
+        assert_eq!(root::<Error<Input>>(input.as_bytes()), Ok((&b""[..], exp)));
     }
 
     #[test]
@@ -1407,7 +1386,7 @@ mod tests {
 "#;
 
         // Someday I'll write a proper test for the above file...
-        let (rest, _) = dts_file::<Error<Input>>(input.as_bytes()).unwrap();
+        let (rest, _) = root::<Error<Input>>(input.as_bytes()).unwrap();
         assert!(rest.is_empty());
     }
 }

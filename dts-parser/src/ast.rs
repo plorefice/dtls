@@ -1,24 +1,14 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dts<'s> {
-    pub includes: Vec<Include<'s>>,
-    pub version: DtsVersion,
-    pub nodes: Vec<Node<'s>>,
-    pub deleted_nodes: Vec<NodeId<'s>>,
-    pub omitted_nodes: Vec<NodeId<'s>>,
-    pub memreserves: Vec<(u64, u64)>,
-}
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Root<'s>(pub(crate) Vec<RootItem<'s>>);
 
-impl<'s> Default for Dts<'s> {
-    fn default() -> Self {
-        Dts {
-            includes: Vec::new(),
-            version: DtsVersion::V0,
-            nodes: Vec::new(),
-            deleted_nodes: Vec::new(),
-            omitted_nodes: Vec::new(),
-            memreserves: Vec::new(),
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootItem<'s> {
+    Include(Include<'s>),
+    Version(DtsVersion),
+    Node(Node<'s>),
+    OmitNode(NodeId<'s>),
+    DeleteNode(NodeId<'s>),
+    MemReserve((u64, u64)),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
