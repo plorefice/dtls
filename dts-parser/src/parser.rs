@@ -156,7 +156,7 @@ where
 }
 
 /// Recognize the name of a root node.
-fn root_node_name<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn root_node_name<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -180,7 +180,7 @@ where
 }
 
 /// Parse a node label.
-fn node_label<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn node_label<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -244,7 +244,7 @@ where
 }
 
 /// Parse a propery name.
-fn prop_name<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn prop_name<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -365,7 +365,7 @@ where
 }
 
 /// Parse a deleted property.
-fn deleted_property<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn deleted_property<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -421,7 +421,7 @@ where
 }
 
 /// Parse a valid node name identifier, i.e. the part of the node name before the unit-address.
-fn node_name_identifier<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn node_name_identifier<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -429,7 +429,7 @@ where
 }
 
 /// Parse a valid node unit-address identifier.
-fn node_address_identifier<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn node_address_identifier<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -543,7 +543,7 @@ where
 }
 
 /// Parse a valid include directive.
-fn include_directive<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn include_directive<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -554,7 +554,7 @@ where
 }
 
 /// Parse a valid string literal.
-fn string_literal<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn string_literal<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -755,7 +755,7 @@ where
 }
 
 /// Recognize a sequence of printable ASCII characters.
-fn printable_ascii<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn printable_ascii<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -771,7 +771,7 @@ where
 }
 
 /// Recognize a valid path in an `/include/` directive.
-fn include_path_str<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn include_path_str<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -779,7 +779,7 @@ where
 }
 
 /// Recognize a valid node name string.
-fn node_name_str<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn node_name_str<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -787,7 +787,7 @@ where
 }
 
 /// Recognize a valid node label string.
-fn node_label_str<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn node_label_str<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -795,7 +795,7 @@ where
 }
 
 /// Recognize a valid node path.
-fn node_path<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn node_path<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -806,7 +806,7 @@ where
 }
 
 /// Recognize a valid property name string.
-fn prop_name_str<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn prop_name_str<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -814,7 +814,7 @@ where
 }
 
 /// Recognize an include directive prefix.
-fn include_keyword<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn include_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -822,7 +822,7 @@ where
 }
 
 /// Recognize the `/bits/` keyword.
-fn bits_keyword<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn bits_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -830,7 +830,7 @@ where
 }
 
 /// Recognize the `/memreserve/` keyword.
-fn memreserve_keyword<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn memreserve_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -838,7 +838,7 @@ where
 }
 
 /// Recognize the `/delete-node/` keyword.
-fn delete_node_keyword<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn delete_node_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -846,7 +846,7 @@ where
 }
 
 /// Recognize the `/delete-property/` keyword.
-fn delete_property_keyword<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn delete_property_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -854,7 +854,7 @@ where
 }
 
 /// Recognize the `/omit-if-no-ref/` keyword.
-fn omit_if_no_ref_keyword<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn omit_if_no_ref_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -862,7 +862,7 @@ where
 }
 
 /// Recognize the `/dts-v1/` keyword.
-fn dts_v1_keyword<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn dts_v1_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -882,7 +882,7 @@ where
 }
 
 /// Consume zero or more whitespace characters or comments.
-fn ws<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn ws<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -890,7 +890,7 @@ where
 }
 
 /// Parse block comments.
-fn block_comment<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn block_comment<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
@@ -900,7 +900,7 @@ where
 /// Parse a single line comment.
 ///
 /// The parser stops just before the newline character but doesn't consume the newline.
-fn line_comment<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
+fn line_comment<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
 where
     E: ParseError<Input<'a>>,
 {
