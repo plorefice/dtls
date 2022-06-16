@@ -413,10 +413,15 @@ fn expression_parens<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<
 
 /// Parse a valid integer expression term in a property cell.
 ///
-/// A term may be a single integer literal, a binary operator applied to two terms
-/// or a unary operator applied to a single term.
+/// A term may be a single integer literal, a binary operator applied to two terms,
+/// a unary operator applied to a single term or a ternaty conditional operator.
 fn expression_term<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
-    alt((expression_binary, expression_unary, expression_lit))(input)
+    alt((
+        expression_ternary,
+        expression_binary,
+        expression_unary,
+        expression_lit,
+    ))(input)
 }
 
 /// Parse a valid binary integer expression term in a property cell.
@@ -436,6 +441,26 @@ fn expression_unary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'
     map(
         tuple((arith_operator_unary, cut(expression))),
         |(op, right)| Expression::Unary(op, Box::new(right)),
+    )(input)
+}
+
+/// Parse a valid ternary expression in a property cell.
+fn expression_ternary<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Expression, E> {
+    map(
+        tuple((
+            expression,
+            ternary_if_operator,
+            cut(alt((expression_term, expression_parens))),
+            cut(ternary_else_operator),
+            cut(alt((expression_term, expression_parens))),
+        )),
+        |(cond, _, left, _, right)| Expression::Ternary {
+            cond: Box::new(cond),
+            left: Box::new(left),
+            right: Box::new(right),
+        },
     )(input)
 }
 
@@ -577,6 +602,16 @@ fn reference_operator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult
     lexeme(char('&'))(input)
 }
 
+/// Recognize a ternary `?` operator.
+fn ternary_if_operator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+    lexeme(char('?'))(input)
+}
+
+/// Recognize a ternary `:` operator.
+fn ternary_else_operator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+    lexeme(char(':'))(input)
+}
+
 /// Recognize a path separator.
 fn path_separator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('/'))(input)
@@ -594,15 +629,21 @@ fn arith_operator_binary<'a, E: ParseError<Input<'a>>>(
     input: Input<'a>,
 ) -> IResult<'a, BinaryOperator, E> {
     lexeme(alt((
+        map(tag("<<"), |_| BinaryOperator::LShift),
+        map(tag(">>"), |_| BinaryOperator::RShift),
+        map(tag("=="), |_| BinaryOperator::Eq),
+        map(tag("!="), |_| BinaryOperator::Neq),
+        map(tag("<="), |_| BinaryOperator::Le),
+        map(tag(">="), |_| BinaryOperator::Ge),
         map(tag("+"), |_| BinaryOperator::Add),
         map(tag("-"), |_| BinaryOperator::Sub),
         map(tag("*"), |_| BinaryOperator::Mul),
         map(tag("/"), |_| BinaryOperator::Div),
-        map(tag("<<"), |_| BinaryOperator::LShift),
-        map(tag(">>"), |_| BinaryOperator::RShift),
         map(tag("&"), |_| BinaryOperator::BitAnd),
         map(tag("|"), |_| BinaryOperator::BitOr),
         map(tag("^"), |_| BinaryOperator::BitXor),
+        map(tag("<"), |_| BinaryOperator::Lt),
+        map(tag(">"), |_| BinaryOperator::Gt),
     )))(input)
 }
 
@@ -1244,6 +1285,23 @@ mod tests {
             dts_file::<Error<Input>>(input.as_bytes()),
             Ok((&b""[..], exp))
         );
+    }
+
+    #[test]
+    fn parse_ternary_operator() {
+        let input = r#"
+        (
+            (35 <= 2) ? (0x00b4 + 4 * 35) :
+                (35 <= 26) ? (0x027c + 4 * (35 - 3)) :
+                    (35 <= 98) ? (0x0400 + 4 * (35 - 27)) :
+                        (35 <= 127) ? (0x0600 + 4 * (35 - 99)) :
+                        0
+        )"#;
+
+        match expression::<Error<Input>>(input.as_bytes()).finish() {
+            Ok((rest, _)) => assert!(rest.is_empty()),
+            Err(e) => panic!("{}", std::str::from_utf8(e.input).unwrap()),
+        }
     }
 
     #[test]

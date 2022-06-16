@@ -96,6 +96,11 @@ pub enum Expression {
     Lit(IntegerLiteral),
     Unary(UnaryOperator, Box<Expression>),
     Binary(Box<Expression>, BinaryOperator, Box<Expression>),
+    Ternary {
+        cond: Box<Expression>,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,4 +125,10 @@ pub enum BinaryOperator {
     BitAnd,
     BitOr,
     BitXor,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
 }
