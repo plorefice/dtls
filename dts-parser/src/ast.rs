@@ -1,14 +1,14 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dts {
+pub struct Dts<'s> {
     pub version: DtsVersion,
-    pub includes: Vec<String>,
-    pub nodes: Vec<Node>,
-    pub deleted_nodes: Vec<NodeId>,
-    pub omitted_nodes: Vec<NodeId>,
+    pub includes: Vec<&'s str>,
+    pub nodes: Vec<Node<'s>>,
+    pub deleted_nodes: Vec<NodeId<'s>>,
+    pub omitted_nodes: Vec<NodeId<'s>>,
     pub memreserves: Vec<(u64, u64)>,
 }
 
-impl Default for Dts {
+impl<'s> Default for Dts<'s> {
     fn default() -> Self {
         Dts {
             version: DtsVersion::V0,
@@ -28,17 +28,17 @@ pub enum DtsVersion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Node {
-    pub id: NodeId,
-    pub labels: Vec<String>,
-    pub contents: NodeContents,
+pub struct Node<'s> {
+    pub id: NodeId<'s>,
+    pub labels: Vec<&'s str>,
+    pub contents: NodeContents<'s>,
     pub omit_if_no_ref: bool,
 }
 
-impl Default for Node {
+impl<'s> Default for Node<'s> {
     fn default() -> Self {
         Self {
-            id: NodeId::Name(String::new(), None),
+            id: NodeId::Name("", None),
             labels: Default::default(),
             contents: Default::default(),
             omit_if_no_ref: Default::default(),
@@ -47,41 +47,41 @@ impl Default for Node {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeId {
-    Ref(Reference),
-    Name(String, Option<String>),
+pub enum NodeId<'s> {
+    Ref(Reference<'s>),
+    Name(&'s str, Option<&'s str>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reference(pub String);
+pub struct Reference<'s>(pub &'s str);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct NodeContents {
-    pub props: Vec<Property>,
-    pub children: Vec<Node>,
-    pub includes: Vec<String>,
-    pub deleted_props: Vec<String>,
-    pub deleted_nodes: Vec<NodeId>,
+pub struct NodeContents<'s> {
+    pub props: Vec<Property<'s>>,
+    pub children: Vec<Node<'s>>,
+    pub includes: Vec<&'s str>,
+    pub deleted_props: Vec<&'s str>,
+    pub deleted_nodes: Vec<NodeId<'s>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Property {
-    pub name: String,
-    pub value: Option<Vec<PropertyValue>>,
+pub struct Property<'s> {
+    pub name: &'s str,
+    pub value: Option<Vec<PropertyValue<'s>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PropertyValue {
-    Str(String),
-    Ref(Reference),
+pub enum PropertyValue<'s> {
+    Str(&'s str),
+    Ref(Reference<'s>),
     Bytestring(Vec<u8>),
-    CellArray(Vec<PropertyCell>),
+    CellArray(Vec<PropertyCell<'s>>),
     Bits(u32, Vec<IntegerExpression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PropertyCell {
-    Ref(Reference),
+pub enum PropertyCell<'s> {
+    Ref(Reference<'s>),
     Expr(IntegerExpression),
 }
 

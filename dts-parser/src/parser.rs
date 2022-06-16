@@ -1,4 +1,4 @@
-use std::{io::Read, str};
+use std::str;
 
 use nom::{
     branch::alt,
@@ -29,33 +29,23 @@ pub fn from_str(s: &str) -> Result<Dts, String> {
 }
 
 /// Parse a Device Tree source file.
-pub fn from_reader(mut r: impl Read) -> Result<Dts, String> {
-    let mut dts = String::new();
-    r.read_to_string(&mut dts).map_err(|e| e.to_string())?;
-
-    from_str(dts.as_str())
-}
-
-/// Parse a Device Tree source file.
 fn dts_file<'a, E>(input: Input<'a>) -> IResult<'a, Dts, E>
 where
     E: ParseError<Input<'a>>,
 {
-    enum TopLevelContents {
-        Node(Node),
-        Include(String),
+    enum TopLevelContents<'s> {
+        Node(Node<'s>),
+        Include(&'s str),
         VersionDirective,
-        DeletedNodeDirective(NodeId),
-        OmitIfNoRefDirective(NodeId),
+        DeletedNodeDirective(NodeId<'s>),
+        OmitIfNoRefDirective(NodeId<'s>),
         MemreserveDirective((u64, u64)),
     }
 
     let root_node = map(root_node, TopLevelContents::Node);
     let node_override = map(node_override, TopLevelContents::Node);
     let version_directive = map(version_directive, |_| TopLevelContents::VersionDirective);
-    let include_directive = map(include_directive, |s| {
-        TopLevelContents::Include(s.to_string())
-    });
+    let include_directive = map(include_directive, TopLevelContents::Include);
     let deleted_node_directive = map(deleted_node, TopLevelContents::DeletedNodeDirective);
     let omit_if_no_ref_directive = map(omit_if_no_ref, TopLevelContents::OmitIfNoRefDirective);
     let memreserve_directive = map(memreserve, TopLevelContents::MemreserveDirective);
@@ -109,7 +99,7 @@ where
     map(
         tuple((root_node_name, node_body, cut(terminator))),
         |(name, contents, _)| Node {
-            id: NodeId::Name(name.to_string(), None),
+            id: NodeId::Name(name, None),
             contents,
             ..Default::default()
         },
@@ -166,11 +156,11 @@ where
 }
 
 /// Recognize the name of a root node.
-fn root_node_name<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
+fn root_node_name<'a, E>(input: Input<'a>) -> IResult<'a, &'a str, E>
 where
     E: ParseError<Input<'a>>,
 {
-    path_separator(input)
+    lexeme(tag("/"))(input)
 }
 
 /// Parse the body of a device tree node.
@@ -182,13 +172,11 @@ where
 }
 
 /// Parse a list of node labels.
-fn node_labels<'a, E>(input: Input<'a>) -> IResult<'a, Vec<String>, E>
+fn node_labels<'a, E>(input: Input<'a>) -> IResult<'a, Vec<&'a str>, E>
 where
     E: ParseError<Input<'a>>,
 {
-    map(many0(terminated(node_label, label_separator)), |v| {
-        v.into_iter().map(String::from).collect()
-    })(input)
+    many0(terminated(node_label, label_separator))(input)
 }
 
 /// Parse a node label.
@@ -204,12 +192,12 @@ fn node_contents<'a, E>(input: Input<'a>) -> IResult<'a, NodeContents, E>
 where
     E: ParseError<Input<'a>>,
 {
-    enum NodeContent {
-        Node(Node),
-        Prop(Property),
-        Include(String),
-        DeletedProp(String),
-        DeletedNode(NodeId),
+    enum NodeContent<'s> {
+        Node(Node<'s>),
+        Prop(Property<'s>),
+        Include(&'s str),
+        DeletedProp(&'s str),
+        DeletedNode(NodeId<'s>),
     }
 
     // A node can contain 0+ properties and 0+ child nodes.
@@ -219,10 +207,8 @@ where
         many0(alt((
             map(inner_node, NodeContent::Node),
             map(property, NodeContent::Prop),
-            map(include_directive, |s| NodeContent::Include(s.to_string())),
-            map(deleted_property, |s| {
-                NodeContent::DeletedProp(s.to_string())
-            }),
+            map(include_directive, NodeContent::Include),
+            map(deleted_property, NodeContent::DeletedProp),
             map(deleted_node, NodeContent::DeletedNode),
         ))),
         |contents| {
@@ -253,10 +239,7 @@ where
             opt(preceded(assignment, cut(prop_values))),
             cut(terminator),
         )),
-        |(name, value, _)| Property {
-            name: name.to_string(),
-            value,
-        },
+        |(name, value, _)| Property { name, value },
     )(input)
 }
 
@@ -317,7 +300,7 @@ fn prop_value_str<'a, E>(input: Input<'a>) -> IResult<'a, PropertyValue, E>
 where
     E: ParseError<Input<'a>>,
 {
-    lexeme(map(string_literal, |s| PropertyValue::Str(s.to_string())))(input)
+    lexeme(map(string_literal, PropertyValue::Str))(input)
 }
 
 /// Parse a property value corresponding to a cell array.
@@ -418,10 +401,8 @@ fn node_reference<'a, E>(input: Input<'a>) -> IResult<'a, Reference, E>
 where
     E: ParseError<Input<'a>>,
 {
-    let node_label = map(node_label_str, |s| Reference(s.to_string()));
-    let node_path = map(delimited(braces_start, node_path, braces_end), |s| {
-        Reference(s.to_string())
-    });
+    let node_label = map(node_label_str, Reference);
+    let node_path = map(delimited(braces_start, node_path, braces_end), Reference);
 
     preceded(reference_operator, cut(alt((node_label, node_path))))(input)
 }
@@ -435,7 +416,7 @@ where
 {
     map(
         tuple((node_name_identifier, opt(node_address_identifier))),
-        |(name, address)| NodeId::Name(name.to_string(), address.map(String::from)),
+        |(name, address)| NodeId::Name(name, address),
     )(input)
 }
 
@@ -968,22 +949,13 @@ mod tests {
     #[test]
     fn parse_node_names() {
         for (input, exp) in [
-            ("cpus", NodeId::Name("cpus".to_string(), None)),
-            (
-                "cpu@0",
-                NodeId::Name("cpu".to_string(), Some("0".to_string())),
-            ),
-            ("l2-cache", NodeId::Name("l2-cache".to_string(), None)),
-            ("open-pic", NodeId::Name("open-pic".to_string(), None)),
-            ("soc_gpio1", NodeId::Name("soc_gpio1".to_string(), None)),
-            (
-                "memory@0",
-                NodeId::Name("memory".to_string(), Some("0".to_string())),
-            ),
-            (
-                "uart@fe001000",
-                NodeId::Name("uart".to_string(), Some("fe001000".to_string())),
-            ),
+            ("cpus", NodeId::Name("cpus", None)),
+            ("cpu@0", NodeId::Name("cpu", Some("0"))),
+            ("l2-cache", NodeId::Name("l2-cache", None)),
+            ("open-pic", NodeId::Name("open-pic", None)),
+            ("soc_gpio1", NodeId::Name("soc_gpio1", None)),
+            ("memory@0", NodeId::Name("memory", Some("0"))),
+            ("uart@fe001000", NodeId::Name("uart", Some("fe001000"))),
         ] {
             match node_name::<VerboseError<&str>>(input).finish() {
                 Ok(res) => assert_eq!(res, ("", exp)),
@@ -1034,68 +1006,63 @@ mod tests {
             (
                 r#"device_type = "cpu";"#,
                 Property {
-                    name: String::from("device_type"),
-                    value: Some(vec![Str(String::from("cpu"))]),
+                    name: "device_type",
+                    value: Some(vec![Str("cpu")]),
                 },
             ),
             (
                 r#"compatible = "ns16550", "ns8250";"#,
                 Property {
-                    name: String::from("compatible"),
-                    value: Some(vec![
-                        Str(String::from("ns16550")),
-                        Str(String::from("ns8250")),
-                    ]),
+                    name: "compatible",
+                    value: Some(vec![Str("ns16550"), Str("ns8250")]),
                 },
             ),
             (
                 r#"example = <&mpic 0xf00f0000 19>, "a strange property format";"#,
                 Property {
-                    name: String::from("example"),
+                    name: "example",
                     value: Some(vec![
                         CellArray(vec![
-                            PropertyCell::Ref(Reference("mpic".to_string())),
+                            PropertyCell::Ref(Reference("mpic")),
                             Expr(Lit(Num(0xf00f_0000))),
                             Expr(Lit(Num(19))),
                         ]),
-                        Str(String::from("a strange property format")),
+                        Str("a strange property format"),
                     ]),
                 },
             ),
             (
                 r#"reg = <0>;"#,
                 Property {
-                    name: String::from("reg"),
+                    name: "reg",
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                 },
             ),
             (
                 r#"cache-unified;"#,
                 Property {
-                    name: String::from("cache-unified"),
+                    name: "cache-unified",
                     value: None,
                 },
             ),
             (
                 r#"cache-size = <0x8000>;"#,
                 Property {
-                    name: String::from("cache-size"),
+                    name: "cache-size",
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0x8000)))])]),
                 },
             ),
             (
                 r#"next-level-cache = <&L2_0>;"#,
                 Property {
-                    name: String::from("next-level-cache"),
-                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference(
-                        "L2_0".to_string(),
-                    ))])]),
+                    name: "next-level-cache",
+                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference("L2_0"))])]),
                 },
             ),
             (
                 r#"interrupts = <17 0xc 'A'>;"#,
                 Property {
-                    name: String::from("interrupts"),
+                    name: "interrupts",
                     value: Some(vec![CellArray(vec![
                         Expr(Lit(Num(17))),
                         Expr(Lit(Num(0xc))),
@@ -1106,23 +1073,23 @@ mod tests {
             (
                 r#"serial0 = &usart3;"#,
                 Property {
-                    name: String::from("serial0"),
-                    value: Some(vec![PropertyValue::Ref(Reference("usart3".to_string()))]),
+                    name: "serial0",
+                    value: Some(vec![PropertyValue::Ref(Reference("usart3"))]),
                 },
             ),
             (
                 r#"cpu = <&{/cpus/cpu@0}>;"#,
                 Property {
-                    name: String::from("cpu"),
+                    name: "cpu",
                     value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference(
-                        "/cpus/cpu@0".to_string(),
+                        "/cpus/cpu@0",
                     ))])]),
                 },
             ),
             (
                 r#"pinctrl-0 = <>;"#,
                 Property {
-                    name: String::from("pinctrl-0"),
+                    name: "pinctrl-0",
                     value: Some(vec![PropertyValue::CellArray(vec![])]),
                 },
             ),
@@ -1144,15 +1111,15 @@ mod tests {
         let input = r#"/ { #address-cells = <2>; #size-cells = <1>; };"#;
 
         let exp = Node {
-            id: NodeId::Name("/".to_string(), None),
+            id: NodeId::Name("/", None),
             contents: NodeContents {
                 props: vec![
                     Property {
-                        name: String::from("#address-cells"),
+                        name: "#address-cells",
                         value: Some(vec![CellArray(vec![Expr(Lit(Num(2)))])]),
                     },
                     Property {
-                        name: String::from("#size-cells"),
+                        name: "#size-cells",
                         value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                     },
                 ],
@@ -1204,61 +1171,61 @@ mod tests {
 "#;
 
         let exp = Node {
-            id: NodeId::Name("cpus".to_string(), None),
+            id: NodeId::Name("cpus", None),
             contents: NodeContents {
                 props: vec![
                     Property {
-                        name: String::from("#address-cells"),
+                        name: "#address-cells",
                         value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                     },
                     Property {
-                        name: String::from("#size-cells"),
+                        name: "#size-cells",
                         value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                     },
                 ],
                 children: vec![
                     Node {
-                        id: NodeId::Name("cpu".to_string(), Some("0".to_string())),
+                        id: NodeId::Name("cpu", Some("0")),
                         contents: NodeContents {
                             props: vec![
                                 Property {
-                                    name: String::from("device_type"),
-                                    value: Some(vec![Str(String::from("cpu"))]),
+                                    name: "device_type",
+                                    value: Some(vec![Str("cpu")]),
                                 },
                                 Property {
-                                    name: String::from("reg"),
+                                    name: "reg",
                                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                                 },
                                 Property {
-                                    name: String::from("cache-unified"),
+                                    name: "cache-unified",
                                     value: None,
                                 },
                                 Property {
-                                    name: String::from("cache-size"),
+                                    name: "cache-size",
                                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0x8000)))])]),
                                 },
                                 Property {
-                                    name: String::from("cache-block-size"),
+                                    name: "cache-block-size",
                                     value: Some(vec![CellArray(vec![Expr(Lit(Num(32)))])]),
                                 },
                                 Property {
-                                    name: String::from("timebase-frequency"),
+                                    name: "timebase-frequency",
                                     value: Some(vec![CellArray(vec![Expr(Lit(Num(82_500_000)))])]),
                                 },
                                 Property {
-                                    name: String::from("next-level-cache"),
+                                    name: "next-level-cache",
                                     value: Some(vec![CellArray(vec![PropertyCell::Ref(
-                                        Reference("L2_0".to_string()),
+                                        Reference("L2_0"),
                                     )])]),
                                 },
                             ],
                             children: vec![Node {
-                                id: NodeId::Name("l2-cache".to_string(), None),
-                                labels: vec!["L2_0".to_string()],
+                                id: NodeId::Name("l2-cache", None),
+                                labels: vec!["L2_0"],
                                 contents: NodeContents {
                                     props: vec![Property {
-                                        name: String::from("compatible"),
-                                        value: Some(vec![Str(String::from("cache"))]),
+                                        name: "compatible",
+                                        value: Some(vec![Str("cache")]),
                                     }],
                                     ..Default::default()
                                 },
@@ -1269,25 +1236,25 @@ mod tests {
                         ..Default::default()
                     },
                     Node {
-                        id: NodeId::Name("cpu".to_string(), Some("1".to_string())),
+                        id: NodeId::Name("cpu", Some("1")),
                         contents: NodeContents {
                             props: vec![
                                 Property {
-                                    name: String::from("device_type"),
-                                    value: Some(vec![Str(String::from("cpu"))]),
+                                    name: "device_type",
+                                    value: Some(vec![Str("cpu")]),
                                 },
                                 Property {
-                                    name: String::from("reg"),
+                                    name: "reg",
                                     value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                                 },
                             ],
                             children: vec![Node {
-                                id: NodeId::Name("l2-cache".to_string(), None),
-                                labels: vec!["L2".to_string(), "L2_1".to_string()],
+                                id: NodeId::Name("l2-cache", None),
+                                labels: vec!["L2", "L2_1"],
                                 contents: NodeContents {
                                     props: vec![Property {
-                                        name: String::from("compatible"),
-                                        value: Some(vec![Str(String::from("cache"))]),
+                                        name: "compatible",
+                                        value: Some(vec![Str("cache")]),
                                     }],
                                     ..Default::default()
                                 },
@@ -1342,18 +1309,12 @@ mod tests {
     #[test]
     fn parse_deleted_node_directives() {
         for (input, exp) in [
-            (
-                "/delete-node/ foo;",
-                Some(NodeId::Name("foo".to_string(), None)),
-            ),
+            ("/delete-node/ foo;", Some(NodeId::Name("foo", None))),
             (
                 "/delete-node/ bar@0,0;",
-                Some(NodeId::Name("bar".to_string(), Some("0,0".to_string()))),
+                Some(NodeId::Name("bar", Some("0,0"))),
             ),
-            (
-                "/delete-node/ &baz;",
-                Some(NodeId::Ref(Reference("baz".to_string()))),
-            ),
+            ("/delete-node/ &baz;", Some(NodeId::Ref(Reference("baz")))),
         ] {
             match deleted_node::<VerboseError<&str>>(input).finish() {
                 Ok(res) => assert_eq!(res, ("", exp.unwrap())),
@@ -1383,17 +1344,14 @@ mod tests {
     #[test]
     fn parse_omit_if_no_ref_directives() {
         for (input, exp) in [
-            (
-                "/omit-if-no-ref/ foo;",
-                Some(NodeId::Name("foo".to_string(), None)),
-            ),
+            ("/omit-if-no-ref/ foo;", Some(NodeId::Name("foo", None))),
             (
                 "/omit-if-no-ref/ bar@0,0;",
-                Some(NodeId::Name("bar".to_string(), Some("0,0".to_string()))),
+                Some(NodeId::Name("bar", Some("0,0"))),
             ),
             (
                 "/omit-if-no-ref/ &baz;",
-                Some(NodeId::Ref(Reference("baz".to_string()))),
+                Some(NodeId::Ref(Reference("baz"))),
             ),
         ] {
             match omit_if_no_ref::<VerboseError<&str>>(input).finish() {
@@ -1410,7 +1368,7 @@ mod tests {
         let exp = Dts {
             version: DtsVersion::V1,
             nodes: vec![Node {
-                id: NodeId::Name("/".to_string(), None),
+                id: NodeId::Name("/", None),
                 ..Default::default()
             }],
             ..Default::default()
