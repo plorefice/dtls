@@ -13,16 +13,19 @@ use nom::{
     sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, Finish,
 };
+use nom_locate::LocatedSpan;
 
 use crate::ast::*;
 
-type Input<'a> = &'a [u8];
-
+type Span<'a> = LocatedSpan<&'a [u8]>;
+type Input<'a> = Span<'a>;
 type IResult<'a, T, E> = nom::IResult<Input<'a>, T, E>;
 
 /// Parse a Device Tree from a string.
 pub fn from_str(s: &str) -> Result<Root, nom::error::Error<Input>> {
-    match all_consuming(root)(s.as_bytes()).finish() {
+    let input = Span::new(s.as_bytes());
+
+    match all_consuming(root)(input).finish() {
         Ok((_, dts)) => Ok(dts),
         Err(e) => Err(e),
     }
@@ -64,7 +67,7 @@ fn root_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node
     map(
         tuple((root_node_name, node_body, cut(terminator))),
         |(name, contents, _)| Node {
-            id: NodeId::Name(str::from_utf8(name).unwrap(), None),
+            id: NodeId::Name(str::from_utf8(name.fragment()).unwrap(), None),
             contents,
             ..Default::default()
         },
@@ -88,7 +91,7 @@ fn node_override<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
             id: NodeId::Ref(reference),
             labels: labels
                 .into_iter()
-                .map(|s| str::from_utf8(s).unwrap())
+                .map(|s| str::from_utf8(s.fragment()).unwrap())
                 .collect(),
             contents,
             ommittable: omit.is_some(),
@@ -112,7 +115,7 @@ fn inner_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Nod
             id: name,
             labels: labels
                 .into_iter()
-                .map(|s| str::from_utf8(s).unwrap())
+                .map(|s| str::from_utf8(s.fragment()).unwrap())
                 .collect(),
             contents,
             ommittable: omit.is_some(),
@@ -148,7 +151,7 @@ fn node_contents<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
             map(inner_node, NodeItem::ChildNode),
             map(property, NodeItem::Property),
             map(deleted_property, |s| {
-                NodeItem::DeletedProp(str::from_utf8(s).unwrap())
+                NodeItem::DeletedProp(str::from_utf8(s.fragment()).unwrap())
             }),
             map(deleted_node, NodeItem::DeletedNode),
         )),
@@ -169,7 +172,7 @@ fn property<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Prope
             cut(terminator),
         )),
         |(name, value, _)| Property {
-            name: str::from_utf8(name).unwrap(),
+            name: str::from_utf8(name.fragment()).unwrap(),
             value,
         },
     )(input)
@@ -220,7 +223,7 @@ fn prop_value_alias<'a, E: ParseError<Input<'a>>>(
 /// Parse a property value corresponding to a string.
 fn prop_value_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyValue, E> {
     lexeme(map(string_literal, |s: Input| {
-        PropertyValue::Str(str::from_utf8(s).unwrap())
+        PropertyValue::Str(str::from_utf8(s.fragment()).unwrap())
     }))(input)
 }
 
@@ -304,7 +307,7 @@ fn node_reference<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a,
             node_label_str,
             delimited(left_brace, node_path, right_brace),
         )),
-        |s: Input| Reference(str::from_utf8(s).unwrap()),
+        |s: Input| Reference(str::from_utf8(s.fragment()).unwrap()),
     );
 
     preceded(reference_operator, cut(node_ref))(input)
@@ -318,8 +321,8 @@ fn node_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node
         tuple((node_name_identifier, opt(node_address_identifier))),
         |(name, address)| {
             NodeId::Name(
-                str::from_utf8(name).unwrap(),
-                address.map(|s| str::from_utf8(s).unwrap()),
+                str::from_utf8(name.fragment()).unwrap(),
+                address.map(|s| str::from_utf8(s.fragment()).unwrap()),
             )
         },
     )(input)
@@ -462,7 +465,7 @@ fn include_directive_cpp<'a, E: ParseError<Input<'a>>>(
 
     map(
         preceded(include_cpp_keyword, cut(alt((quoted, bracketed)))),
-        |path: Input| Include::C(str::from_utf8(path).unwrap()),
+        |path: Input| Include::C(str::from_utf8(path.fragment()).unwrap()),
     )(input)
 }
 
@@ -475,7 +478,7 @@ fn include_directive_dts<'a, E: ParseError<Input<'a>>>(
             include_dts_keyword,
             cut(delimited(double_quote, include_path_str, double_quote)),
         ),
-        |path: Input| Include::Dts(str::from_utf8(path).unwrap()),
+        |path: Input| Include::Dts(str::from_utf8(path.fragment()).unwrap()),
     )(input)
 }
 
@@ -612,7 +615,7 @@ fn unsigned_hex<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u
         preceded(alt((tag("0x"), tag("0X"))), cut(hex_digit1)),
         |s: Input| {
             // SAFETY: The input is guaranteed to be a valid hex string.
-            let s = unsafe { str::from_utf8_unchecked(s) };
+            let s = unsafe { str::from_utf8_unchecked(s.fragment()) };
             u64::from_str_radix(s, 16).unwrap()
         },
     )(input)
@@ -634,7 +637,7 @@ fn hex_byte<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u8, E
         take_while_m_n(2, 2, |c: u8| c.is_hex_digit()),
         |s: Input| {
             // SAFETY: The input is guaranteed to be a valid hex string.
-            let s = unsafe { str::from_utf8_unchecked(s) };
+            let s = unsafe { str::from_utf8_unchecked(s.fragment()) };
             u8::from_str_radix(s, 16).unwrap()
         },
     )(input)
@@ -769,29 +772,35 @@ mod tests {
 
     #[test]
     fn parse_escaped_strings() {
-        for (input, exp) in [(
-            &br#""Escaped string: \"\\\"""#[..],
-            &br#"Escaped string: \"\\\""#[..],
-        )] {
-            assert_eq!(string_literal::<Error<Input>>(input), Ok((&b""[..], exp)));
+        for (input, exp) in [(r#""Escaped string: \"\\\"""#, r#"Escaped string: \"\\\""#)] {
+            assert_eq!(
+                &exp.as_bytes(),
+                all_consuming(string_literal::<Error<Input>>)(input.as_bytes().into())
+                    .unwrap()
+                    .1
+                    .fragment()
+            );
         }
     }
 
     #[test]
     fn parse_line_comments() {
-        assert_eq!(
-            line_comment::<Error<Input>>(b"// This is a comment\n"),
-            Ok((&b""[..], &b"// This is a comment\n"[..]))
-        );
+        let (_, res) =
+            all_consuming(line_comment::<Error<Input>>)((&b"// This is a comment\n"[..]).into())
+                .unwrap();
+        assert_eq!(res.fragment(), b"// This is a comment\n");
 
-        assert_eq!(
-            line_comment::<Error<Input>>(b"// Multiline comments\nare not supported"),
-            Ok((&b"are not supported"[..], &b"// Multiline comments\n"[..]))
-        );
+        let (rest, res) =
+            line_comment::<Error<Input>>((&b"// Multiline comments\nare not supported"[..]).into())
+                .unwrap();
 
-        assert!(
-            line_comment::<Error<Input>>(br#"prop-name = "value"; // This is a comment"#).is_err()
-        );
+        assert_eq!(res.fragment(), b"// Multiline comments\n");
+        assert_eq!(rest.fragment(), b"are not supported");
+
+        assert!(line_comment::<Error<Input>>(
+            (&br#"prop-name = "value"; // This is a comment"#[..]).into()
+        )
+        .is_err());
     }
 
     #[test]
@@ -806,8 +815,10 @@ mod tests {
             ("uart@fe001000", NodeId::Name("uart", Some("fe001000"))),
         ] {
             assert_eq!(
-                node_name::<Error<Input>>(input.as_bytes()),
-                Ok((&b""[..], exp))
+                exp,
+                all_consuming(node_name::<Error<Input>>)(input.as_bytes().into())
+                    .unwrap()
+                    .1,
             );
         }
     }
@@ -816,8 +827,11 @@ mod tests {
     fn parse_node_labels() {
         for label in ["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"] {
             assert_eq!(
-                node_label::<Error<Input>>(label.as_bytes()),
-                Ok((&b""[..], label.as_bytes()))
+                &label.as_bytes(),
+                all_consuming(node_label::<Error<Input>>)(label.as_bytes().into())
+                    .unwrap()
+                    .1
+                    .fragment()
             );
         }
     }
@@ -837,8 +851,11 @@ mod tests {
             "linux,network-index",
         ] {
             assert_eq!(
-                prop_name::<Error<Input>>(name.as_bytes()),
-                Ok((&b""[..], name.as_bytes()))
+                &name.as_bytes(),
+                all_consuming(prop_name::<Error<Input>>)(name.as_bytes().into())
+                    .unwrap()
+                    .1
+                    .fragment()
             );
         }
     }
@@ -850,7 +867,7 @@ mod tests {
         use PropertyCell::*;
         use PropertyValue::*;
 
-        for (input, prop) in [
+        for (input, exp) in [
             (
                 r#"device_type = "cpu";"#,
                 Property {
@@ -943,8 +960,10 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                property::<Error<Input>>(input.as_bytes()),
-                Ok((&b""[..], prop))
+                exp,
+                all_consuming(property::<Error<Input>>)(input.as_bytes().into())
+                    .unwrap()
+                    .1,
             );
         }
     }
@@ -974,8 +993,10 @@ mod tests {
         };
 
         assert_eq!(
-            root_node::<Error<Input>>(input.as_bytes()),
-            Ok((&b""[..], exp))
+            exp,
+            all_consuming(root_node::<Error<Input>>)(input.as_bytes().into())
+                .unwrap()
+                .1,
         );
     }
 
@@ -987,33 +1008,33 @@ mod tests {
         use PropertyValue::*;
 
         let input = r#"cpus {
-                #address-cells = <1>;
-                #size-cells = <0>;
+                    #address-cells = <1>;
+                    #size-cells = <0>;
 
-                cpu@0 {
-                    device_type = "cpu";
-                    reg = <0>;
-                    cache-unified;
-                    cache-size = <0x8000>; // L1, 32 KB
-                    cache-block-size = <32>;
-                    timebase-frequency = <82500000>; // 82.5 MHz
-                    next-level-cache = <&L2_0>; // phandle to L2
+                    cpu@0 {
+                        device_type = "cpu";
+                        reg = <0>;
+                        cache-unified;
+                        cache-size = <0x8000>; // L1, 32 KB
+                        cache-block-size = <32>;
+                        timebase-frequency = <82500000>; // 82.5 MHz
+                        next-level-cache = <&L2_0>; // phandle to L2
 
-                    L2_0:l2-cache {
-                        compatible = "cache";
+                        L2_0:l2-cache {
+                            compatible = "cache";
+                        };
+                    };
+
+                    cpu@1 {
+                        device_type = "cpu";
+                        reg = <1>;
+
+                        L2: L2_1: l2-cache {
+                            compatible = "cache";
+                        };
                     };
                 };
-
-                cpu@1 {
-                    device_type = "cpu";
-                    reg = <1>;
-
-                    L2: L2_1: l2-cache {
-                        compatible = "cache";
-                    };
-                };
-            };
-    "#;
+        "#;
 
         let l2_0 = Node {
             id: NodeId::Name("l2-cache", None),
@@ -1118,8 +1139,10 @@ mod tests {
         };
 
         assert_eq!(
-            inner_node::<Error<Input>>(input.as_bytes()),
-            Ok((&b""[..], exp))
+            exp,
+            all_consuming(inner_node::<Error<Input>>)(input.as_bytes().into())
+                .unwrap()
+                .1,
         );
     }
 
@@ -1143,8 +1166,10 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                include_directive::<Error<Input>>(input.as_bytes()),
-                Ok((&b""[..], exp))
+                exp,
+                all_consuming(include_directive::<Error<Input>>)(input.as_bytes().into())
+                    .unwrap()
+                    .1,
             );
         }
     }
@@ -1159,8 +1184,11 @@ mod tests {
             ("/delete-property foo,bar;", None),
             ("foo,bar;", None),
         ] {
-            match deleted_property::<Error<Input>>(input.as_bytes()) {
-                Ok(res) => assert_eq!(res, (&b""[..], exp.unwrap().as_bytes())),
+            match deleted_property::<Error<Input>>(input.as_bytes().into()) {
+                Ok((rest, res)) => {
+                    assert!(rest.is_empty());
+                    assert_eq!(res.fragment(), &exp.unwrap().as_bytes());
+                }
                 Err(_) => assert!(exp.is_none()),
             }
         }
@@ -1176,8 +1204,11 @@ mod tests {
             ),
             ("/delete-node/ &baz;", Some(NodeId::Ref(Reference("baz")))),
         ] {
-            match deleted_node::<Error<Input>>(input.as_bytes()) {
-                Ok(res) => assert_eq!(res, (&b""[..], exp.unwrap())),
+            match deleted_node::<Error<Input>>(input.as_bytes().into()) {
+                Ok((rest, res)) => {
+                    assert!(rest.is_empty());
+                    assert_eq!(res, exp.unwrap());
+                }
                 Err(_) => assert!(exp.is_none()),
             }
         }
@@ -1194,8 +1225,11 @@ mod tests {
             ("/memreserve/;", None),
             ("/memreserve/", None),
         ] {
-            match memreserve::<Error<Input>>(input.as_bytes()) {
-                Ok(res) => assert_eq!(res, (&b""[..], exp.unwrap())),
+            match memreserve::<Error<Input>>(input.as_bytes().into()) {
+                Ok((rest, res)) => {
+                    assert!(rest.is_empty());
+                    assert_eq!(res, exp.unwrap());
+                }
                 Err(_) => assert!(exp.is_none()),
             }
         }
@@ -1214,8 +1248,11 @@ mod tests {
                 Some(NodeId::Ref(Reference("baz"))),
             ),
         ] {
-            match omit_if_no_ref::<Error<Input>>(input.as_bytes()) {
-                Ok(res) => assert_eq!(res, (&b""[..], exp.unwrap())),
+            match omit_if_no_ref::<Error<Input>>(input.as_bytes().into()) {
+                Ok((rest, res)) => {
+                    assert!(rest.is_empty());
+                    assert_eq!(res, exp.unwrap());
+                }
                 Err(_) => assert!(exp.is_none()),
             }
         }
@@ -1234,23 +1271,28 @@ mod tests {
             }),
         ]);
 
-        assert_eq!(root::<Error<Input>>(input.as_bytes()), Ok((&b""[..], exp)));
+        assert_eq!(
+            exp,
+            all_consuming(root::<Error<Input>>)(input.as_bytes().into())
+                .unwrap()
+                .1,
+        );
     }
 
     #[test]
     fn parse_ternary_operator() {
         let input = r#"
-        (
-            (35 <= 2) ? (0x00b4 + 4 * 35) :
-                (35 <= 26) ? (0x027c + 4 * (35 - 3)) :
-                    (35 <= 98) ? (0x0400 + 4 * (35 - 27)) :
-                        (35 <= 127) ? (0x0600 + 4 * (35 - 99)) :
-                        0
-        )"#;
+            (
+                (35 <= 2) ? (0x00b4 + 4 * 35) :
+                    (35 <= 26) ? (0x027c + 4 * (35 - 3)) :
+                        (35 <= 98) ? (0x0400 + 4 * (35 - 27)) :
+                            (35 <= 127) ? (0x0600 + 4 * (35 - 99)) :
+                            0
+            )"#;
 
-        match expression::<Error<Input>>(input.as_bytes()).finish() {
+        match expression::<Error<Input>>(input.as_bytes().into()).finish() {
             Ok((rest, _)) => assert!(rest.is_empty()),
-            Err(e) => panic!("{}", std::str::from_utf8(e.input).unwrap()),
+            Err(e) => panic!("{}", std::str::from_utf8(e.input.fragment()).unwrap()),
         }
     }
 
@@ -1357,7 +1399,7 @@ mod tests {
 "#;
 
         // Someday I'll write a proper test for the above file...
-        let (rest, _) = root::<Error<Input>>(input.as_bytes()).unwrap();
+        let (rest, _) = root::<Error<Input>>(input.as_bytes().into()).unwrap();
         assert!(rest.is_empty());
     }
 }
