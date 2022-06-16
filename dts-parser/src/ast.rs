@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dts<'s> {
+    pub includes: Vec<Include<'s>>,
     pub version: DtsVersion,
-    pub includes: Vec<&'s str>,
     pub nodes: Vec<Node<'s>>,
     pub deleted_nodes: Vec<NodeId<'s>>,
     pub omitted_nodes: Vec<NodeId<'s>>,
@@ -11,14 +11,20 @@ pub struct Dts<'s> {
 impl<'s> Default for Dts<'s> {
     fn default() -> Self {
         Dts {
-            version: DtsVersion::V0,
             includes: Vec::new(),
+            version: DtsVersion::V0,
             nodes: Vec::new(),
             deleted_nodes: Vec::new(),
             omitted_nodes: Vec::new(),
             memreserves: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Include<'s> {
+    C(&'s str),
+    Dts(&'s str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,9 +63,9 @@ pub struct Reference<'s>(pub &'s str);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NodeContents<'s> {
+    pub includes: Vec<Include<'s>>,
     pub props: Vec<Property<'s>>,
     pub children: Vec<Node<'s>>,
-    pub includes: Vec<&'s str>,
     pub deleted_props: Vec<&'s str>,
     pub deleted_nodes: Vec<NodeId<'s>>,
 }
