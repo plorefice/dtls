@@ -29,10 +29,7 @@ pub fn from_str(s: &str) -> Result<Dts, nom::error::Error<Input>> {
 }
 
 /// Parse a Device Tree source file.
-fn dts_file<'a, E>(input: Input<'a>) -> IResult<'a, Dts, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn dts_file<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Dts, E> {
     enum TopLevelContents<'s> {
         Node(Node<'s>),
         Include(Input<'s>),
@@ -80,10 +77,7 @@ where
 }
 
 /// Parse a version directive.
-fn version_directive<'a, E>(input: Input<'a>) -> IResult<'a, DtsVersion, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn version_directive<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, DtsVersion, E> {
     map(terminated(dts_v1_keyword, cut(terminator)), |_| {
         DtsVersion::V1
     })(input)
@@ -92,10 +86,7 @@ where
 /// Parse a valid root node.
 ///
 /// The root node is a top-level named node in the file and its name should always be '/'.
-fn root_node<'a, E>(input: Input<'a>) -> IResult<'a, Node, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn root_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node, E> {
     map(
         tuple((root_node_name, node_body, cut(terminator))),
         |(name, contents, _)| Node {
@@ -110,10 +101,7 @@ where
 ///
 /// Node overrides are only valid in the top-level of the file and their name should be
 /// a valid node reference.
-fn node_override<'a, E>(input: Input<'a>) -> IResult<'a, Node, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_override<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node, E> {
     map(
         tuple((
             opt(omit_if_no_ref_keyword),
@@ -137,10 +125,7 @@ where
 /// Parse a valid inner node.
 ///
 /// Inner nodes are only valid within the body of a node. Their name should be a valid node name.
-fn inner_node<'a, E>(input: Input<'a>) -> IResult<'a, Node, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn inner_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node, E> {
     map(
         tuple((
             opt(omit_if_no_ref_keyword),
@@ -162,42 +147,27 @@ where
 }
 
 /// Recognize the name of a root node.
-fn root_node_name<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn root_node_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/"))(input)
 }
 
 /// Parse the body of a device tree node.
-fn node_body<'a, E>(input: Input<'a>) -> IResult<'a, NodeContents, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_body<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeContents, E> {
     preceded(braces_start, cut(terminated(node_contents, braces_end)))(input)
 }
 
 /// Parse a list of node labels.
-fn node_labels<'a, E>(input: Input<'a>) -> IResult<'a, Vec<Input<'a>>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_labels<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Vec<Input<'a>>, E> {
     many0(terminated(node_label, label_separator))(input)
 }
 
 /// Parse a node label.
-fn node_label<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_label<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     lexeme(node_label_str)(input)
 }
 
 /// Parse the contents of a node.
-fn node_contents<'a, E>(input: Input<'a>) -> IResult<'a, NodeContents, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_contents<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeContents, E> {
     enum NodeContent<'s> {
         Node(Node<'s>),
         Prop(Property<'s>),
@@ -239,10 +209,7 @@ where
 }
 
 /// Parse a node property.
-fn property<'a, E>(input: Input<'a>) -> IResult<'a, Property, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn property<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Property, E> {
     map(
         tuple((
             prop_name,
@@ -257,18 +224,14 @@ where
 }
 
 /// Parse a propery name.
-fn prop_name<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     lexeme(prop_name_str)(input)
 }
 
 /// Parse a property value list.
-fn prop_values<'a, E>(input: Input<'a>) -> IResult<'a, Vec<PropertyValue>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_values<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Vec<PropertyValue>, E> {
     separated_list1(
         list_separator,
         alt((
@@ -282,10 +245,9 @@ where
 }
 
 /// Parse a property value corresponding to the `/bits/` keyword followed by its arguments.
-fn prop_value_bits<'a, E>(input: Input<'a>) -> IResult<'a, PropertyValue, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_value_bits<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, PropertyValue, E> {
     map(
         tuple((
             bits_keyword,
@@ -301,18 +263,14 @@ where
 }
 
 /// Parse a property value corresponding to a reference to another node.
-fn prop_value_alias<'a, E>(input: Input<'a>) -> IResult<'a, PropertyValue, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_value_alias<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, PropertyValue, E> {
     map(node_reference, PropertyValue::Ref)(input)
 }
 
 /// Parse a property value corresponding to a string.
-fn prop_value_str<'a, E>(input: Input<'a>) -> IResult<'a, PropertyValue, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_value_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyValue, E> {
     lexeme(map(string_literal, |s: Input| {
         PropertyValue::Str(str::from_utf8(s).unwrap())
     }))(input)
@@ -321,10 +279,9 @@ where
 /// Parse a property value corresponding to a cell array.
 ///
 /// A cell array can be empty.
-fn prop_value_cell_array<'a, E>(input: Input<'a>) -> IResult<'a, PropertyValue, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_value_cell_array<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, PropertyValue, E> {
     map(
         preceded(
             cell_array_start,
@@ -338,10 +295,9 @@ where
 }
 
 /// Parse a property value corresponding to a byte string.
-fn prop_value_bytestring<'a, E>(input: Input<'a>) -> IResult<'a, PropertyValue, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_value_bytestring<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, PropertyValue, E> {
     map(
         preceded(
             bracket_start,
@@ -352,26 +308,17 @@ where
 }
 
 /// Parse a property cell containing a reference to another node.
-fn prop_cell_ref<'a, E>(input: Input<'a>) -> IResult<'a, PropertyCell, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_cell_ref<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyCell, E> {
     map(node_reference, PropertyCell::Ref)(input)
 }
 
 /// Parse a property cell containing an integer expression.
-fn prop_cell_expr<'a, E>(input: Input<'a>) -> IResult<'a, PropertyCell, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_cell_expr<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyCell, E> {
     lexeme(map(integer_expr, PropertyCell::Expr))(input)
 }
 
 /// Parse a deleted node.
-fn deleted_node<'a, E>(input: Input<'a>) -> IResult<'a, NodeId, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn deleted_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeId, E> {
     delimited(
         delete_node_keyword,
         cut(alt((node_name, map(node_reference, NodeId::Ref)))),
@@ -380,18 +327,12 @@ where
 }
 
 /// Parse a deleted property.
-fn deleted_property<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn deleted_property<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     delimited(delete_property_keyword, cut(prop_name), cut(terminator))(input)
 }
 
 /// Parse a valid memreserve directive.
-fn memreserve<'a, E>(input: Input<'a>) -> IResult<'a, (u64, u64), E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn memreserve<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, (u64, u64), E> {
     delimited(
         memreserve_keyword,
         cut(pair(unsigned_literal, unsigned_literal)),
@@ -400,10 +341,7 @@ where
 }
 
 /// Parse a valid omitted node directive.
-fn omit_if_no_ref<'a, E>(input: Input<'a>) -> IResult<'a, NodeId, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn omit_if_no_ref<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeId, E> {
     delimited(
         omit_if_no_ref_keyword,
         cut(alt((node_name, map(node_reference, NodeId::Ref)))),
@@ -412,10 +350,7 @@ where
 }
 
 /// Parse a valid node reference.
-fn node_reference<'a, E>(input: Input<'a>) -> IResult<'a, Reference, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_reference<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Reference, E> {
     let node_ref = map(
         alt((
             node_label_str,
@@ -430,10 +365,7 @@ where
 /// Parse a valid node name.
 ///
 /// A node name is composed of node-name part and an optional unit-address in hex format.
-fn node_name<'a, E>(input: Input<'a>) -> IResult<'a, NodeId, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeId, E> {
     map(
         tuple((node_name_identifier, opt(node_address_identifier))),
         |(name, address)| {
@@ -446,18 +378,16 @@ where
 }
 
 /// Parse a valid node name identifier, i.e. the part of the node name before the unit-address.
-fn node_name_identifier<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_name_identifier<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Input<'a>, E> {
     lexeme(node_name_str)(input)
 }
 
 /// Parse a valid node unit-address identifier.
-fn node_address_identifier<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_address_identifier<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Input<'a>, E> {
     preceded(char('@'), cut(node_name_str))(input)
 }
 
@@ -465,28 +395,25 @@ where
 ///
 /// Valid expressions include a single integer literal (e.g. `<0>`) or a parenthesized expression
 /// (e.g. `<(1 << 1)>`).
-fn integer_expr<'a, E>(input: Input<'a>) -> IResult<'a, IntegerExpression, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn integer_expr<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, IntegerExpression, E> {
     alt((integer_expr_lit, integer_expr_parens))(input)
 }
 
 /// Parse a valid integer literal expression in a property cell.
-fn integer_expr_lit<'a, E>(input: Input<'a>) -> IResult<'a, IntegerExpression, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn integer_expr_lit<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, IntegerExpression, E> {
     map(integer_literal, IntegerExpression::Lit)(input)
 }
 
 /// Parse a valid parenthesized integer expression in a property cell.
 ///
 /// Parenthesized expressions may contain a single term or an inner parenthesized expression.
-fn integer_expr_parens<'a, E>(input: Input<'a>) -> IResult<'a, IntegerExpression, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn integer_expr_parens<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, IntegerExpression, E> {
     preceded(
         paren_start,
         cut(terminated(
@@ -500,18 +427,16 @@ where
 ///
 /// A term may be a single integer literal, a binary operator applied to two terms
 /// or a unary operator applied to a single term.
-fn integer_expr_term<'a, E>(input: Input<'a>) -> IResult<'a, IntegerExpression, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn integer_expr_term<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, IntegerExpression, E> {
     alt((integer_expr_binary, integer_expr_unary, integer_expr_lit))(input)
 }
 
 /// Parse a valid binary integer expression term in a property cell.
-fn integer_expr_binary<'a, E>(input: Input<'a>) -> IResult<'a, IntegerExpression, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn integer_expr_binary<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, IntegerExpression, E> {
     map(
         tuple((
             integer_expr,
@@ -523,20 +448,18 @@ where
 }
 
 /// Parse a valid unary integer expression term in a property cell.
-fn integer_expr_unary<'a, E>(input: Input<'a>) -> IResult<'a, IntegerExpression, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn integer_expr_unary<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, IntegerExpression, E> {
     map(
         tuple((arith_operator_unary, cut(integer_expr))),
         |(op, right)| IntegerExpression::Unary(op, Box::new(right)),
     )(input)
 }
 
-fn integer_literal<'a, E>(input: Input<'a>) -> IResult<'a, IntegerLiteral, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn integer_literal<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, IntegerLiteral, E> {
     alt((
         map(numeric_literal, IntegerLiteral::Num),
         map(char_literal, IntegerLiteral::Char),
@@ -544,34 +467,22 @@ where
 }
 
 /// Parse a valid unsigned integer number in any base.
-fn unsigned_literal<'a, E>(input: Input<'a>) -> IResult<'a, u64, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn unsigned_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u64, E> {
     lexeme(alt((unsigned_hex, unsigned_dec)))(input)
 }
 
 /// Parse a valid signed integer number in any base.
-fn numeric_literal<'a, E>(input: Input<'a>) -> IResult<'a, i64, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn numeric_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, i64, E> {
     lexeme(alt((hex, dec)))(input)
 }
 
 /// Parse a valid character literal.
-fn char_literal<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn char_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     delimited(char('\''), cut(anychar), cut(char('\'')))(input)
 }
 
 /// Parse a valid include directive.
-fn include_directive<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn include_directive<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     preceded(
         include_keyword,
         cut(delimited(double_quote, include_path_str, double_quote)),
@@ -579,148 +490,98 @@ where
 }
 
 /// Parse a valid string literal.
-fn string_literal<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn string_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     preceded(double_quote, cut(terminated(printable_ascii, double_quote)))(input)
 }
 
 /* === Low-level syntax parsers === */
 
 /// Recognize a double-quote character.
-fn double_quote<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn double_quote<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('"'))(input)
 }
 
 /// Recognize an assigment operator.
-fn assignment<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn assignment<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('='))(input)
 }
 
 /// Recognize a statement terminator.
-fn terminator<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn terminator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char(';'))(input)
 }
 
 /// Recognize a list separator.
-fn list_separator<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn list_separator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char(','))(input)
 }
 
 /// Recognize a label separator.
-fn label_separator<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn label_separator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char(':'))(input)
 }
 
 /// Recognize the start of a brace.
-fn braces_start<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn braces_start<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('{'))(input)
 }
 
 /// Recognize the end of a brace.
-fn braces_end<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn braces_end<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('}'))(input)
 }
 
 /// Recognize the start of a cell array.
-fn cell_array_start<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn cell_array_start<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('<'))(input)
 }
 
 /// Recognize the end of a cell array.
-fn cell_array_end<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn cell_array_end<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('>'))(input)
 }
 
 /// Recognize the start of a parenthesis.
-fn paren_start<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn paren_start<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('('))(input)
 }
 
 /// Recognize the end of a parenthesis.
-fn paren_end<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn paren_end<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char(')'))(input)
 }
 
 /// Recognize the start of a bracket.
-fn bracket_start<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn bracket_start<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('['))(input)
 }
 
 /// Recognize the end of a bracket.
-fn bracket_end<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn bracket_end<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char(']'))(input)
 }
 
 /// Recognize a reference operator.
-fn reference_operator<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn reference_operator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('&'))(input)
 }
 
 /// Recognize a path separator.
-fn path_separator<'a, E>(input: Input<'a>) -> IResult<'a, char, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn path_separator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('/'))(input)
 }
 
 /// Recognize an arithmetic unary operator.
-fn arith_operator_unary<'a, E>(input: Input<'a>) -> IResult<'a, UnaryOperator, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn arith_operator_unary<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, UnaryOperator, E> {
     lexeme(map(tag("~"), |_| UnaryOperator::BitNot))(input)
 }
 
 /// Recognize an arithmetic binary operator.
-fn arith_operator_binary<'a, E>(input: Input<'a>) -> IResult<'a, BinaryOperator, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn arith_operator_binary<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, BinaryOperator, E> {
     lexeme(alt((
         map(tag("+"), |_| BinaryOperator::Add),
         map(tag("-"), |_| BinaryOperator::Sub),
@@ -735,18 +596,12 @@ where
 }
 
 /// Parse a signed integer number in base 16, prefixed by `0x`.
-fn hex<'a, E>(input: Input<'a>) -> IResult<'a, i64, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn hex<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, i64, E> {
     map(unsigned_hex, |d| d as i64)(input)
 }
 
 /// Parse an usigned integer number in base 16, prefixed by `0x`.
-fn unsigned_hex<'a, E>(input: Input<'a>) -> IResult<'a, u64, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn unsigned_hex<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u64, E> {
     map(
         preceded(alt((tag("0x"), tag("0X"))), cut(hex_digit1)),
         |s: Input| {
@@ -758,26 +613,17 @@ where
 }
 
 /// Parse a signed integer number in base 10.
-fn dec<'a, E>(input: Input<'a>) -> IResult<'a, i64, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn dec<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, i64, E> {
     i64(input)
 }
 
 /// Parse an unsigned integer number in base 10.
-fn unsigned_dec<'a, E>(input: Input<'a>) -> IResult<'a, u64, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn unsigned_dec<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u64, E> {
     u64(input)
 }
 
 /// Parse a byte represented by two hex digits.
-fn hex_byte<'a, E>(input: Input<'a>) -> IResult<'a, u8, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn hex_byte<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u8, E> {
     map(
         take_while_m_n(2, 2, |c: u8| c.is_hex_digit()),
         |s: Input| {
@@ -789,10 +635,7 @@ where
 }
 
 /// Recognize a sequence of printable ASCII characters.
-fn printable_ascii<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn printable_ascii<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(many0(escaped(
         alt((
             alphanumeric1,
@@ -805,34 +648,22 @@ where
 }
 
 /// Recognize a valid path in an `/include/` directive.
-fn include_path_str<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn include_path_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(separated_list1(path_separator, is_not("/\0\"<>")))(input)
 }
 
 /// Recognize a valid node name string.
-fn node_name_str<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_name_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+-")))))(input)
 }
 
 /// Recognize a valid node label string.
-fn node_label_str<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_label_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a("_")))))(input)
 }
 
 /// Recognize a valid node path.
-fn node_path<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn node_path<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(preceded(
         path_separator,
         separated_list1(path_separator, node_name),
@@ -840,66 +671,48 @@ where
 }
 
 /// Recognize a valid property name string.
-fn prop_name_str<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn prop_name_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+?#-")))))(input)
 }
 
 /// Recognize an include directive prefix.
-fn include_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn include_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/include/"))(input)
 }
 
 /// Recognize the `/bits/` keyword.
-fn bits_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn bits_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/bits/"))(input)
 }
 
 /// Recognize the `/memreserve/` keyword.
-fn memreserve_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn memreserve_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/memreserve/"))(input)
 }
 
 /// Recognize the `/delete-node/` keyword.
-fn delete_node_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn delete_node_keyword<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/delete-node/"))(input)
 }
 
 /// Recognize the `/delete-property/` keyword.
-fn delete_property_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn delete_property_keyword<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/delete-property/"))(input)
 }
 
 /// Recognize the `/omit-if-no-ref/` keyword.
-fn omit_if_no_ref_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn omit_if_no_ref_keyword<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/omit-if-no-ref/"))(input)
 }
 
 /// Recognize the `/dts-v1/` keyword.
-fn dts_v1_keyword<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn dts_v1_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/dts-v1/"))(input)
 }
 
@@ -907,37 +720,27 @@ where
 
 /// Parse a lexeme using the combinator passed as its argument,
 /// also consuming any whitespaces or comments before or after.
-fn lexeme<'a, O, F, E>(f: F) -> impl FnMut(Input<'a>) -> IResult<'a, O, E>
+fn lexeme<'a, O, F, E: ParseError<Input<'a>>>(f: F) -> impl FnMut(Input<'a>) -> IResult<'a, O, E>
 where
-    E: ParseError<Input<'a>>,
     F: FnMut(Input<'a>) -> IResult<'a, O, E>,
 {
     delimited(ws, f, ws)
 }
 
 /// Consume zero or more whitespace characters or comments.
-fn ws<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn ws<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(many0(alt((multispace1, line_comment, block_comment))))(input)
 }
 
 /// Parse block comments.
-fn block_comment<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn block_comment<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(preceded(tag("/*"), many_till(anychar, tag("*/"))))(input)
 }
 
 /// Parse a single line comment.
 ///
 /// The parser stops just before the newline character but doesn't consume the newline.
-fn line_comment<'a, E>(input: Input<'a>) -> IResult<'a, Input<'a>, E>
-where
-    E: ParseError<Input<'a>>,
-{
+fn line_comment<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
     recognize(preceded(tag("//"), many_till(anychar, line_ending)))(input)
 }
 
