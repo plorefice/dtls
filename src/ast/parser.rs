@@ -8,7 +8,7 @@ use nom::{
         alphanumeric1, anychar, char, hex_digit1, i64, line_ending, multispace1, one_of, space1,
         u64,
     },
-    combinator::{cut, map, opt, recognize},
+    combinator::{all_consuming, cut, map, opt, recognize},
     error::{convert_error, ParseError, VerboseError},
     multi::{many0, many1, many_m_n, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
@@ -26,9 +26,8 @@ pub fn from_reader(mut r: impl Read) -> Result<Dts> {
     let mut dts = String::new();
     r.read_to_string(&mut dts)?;
 
-    let dts = match dts_file::<VerboseError<&str>>(&dts).finish() {
-        Ok(("", dts)) => dts,
-        Ok((rest, _)) => bail!("unexpected trailing characters: {}", rest),
+    let dts = match all_consuming(dts_file::<VerboseError<&str>>)(&dts).finish() {
+        Ok((_, dts)) => dts,
         Err(e) => bail!("{}", convert_error(dts.as_str(), e)),
     };
 
