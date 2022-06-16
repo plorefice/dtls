@@ -1,15 +1,11 @@
-pub use parser::*;
-
-mod parser;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dts {
-    version: DtsVersion,
-    includes: Vec<String>,
-    nodes: Vec<Node>,
-    deleted_nodes: Vec<NodeId>,
-    omitted_nodes: Vec<NodeId>,
-    memreserves: Vec<(u64, u64)>,
+    pub version: DtsVersion,
+    pub includes: Vec<String>,
+    pub nodes: Vec<Node>,
+    pub deleted_nodes: Vec<NodeId>,
+    pub omitted_nodes: Vec<NodeId>,
+    pub memreserves: Vec<(u64, u64)>,
 }
 
 impl Default for Dts {
@@ -33,10 +29,10 @@ pub enum DtsVersion {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
-    id: NodeId,
-    labels: Vec<String>,
-    contents: NodeContents,
-    omit_if_no_ref: bool,
+    pub id: NodeId,
+    pub labels: Vec<String>,
+    pub contents: NodeContents,
+    pub omit_if_no_ref: bool,
 }
 
 impl Default for Node {
@@ -57,21 +53,21 @@ pub enum NodeId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reference(String);
+pub struct Reference(pub String);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NodeContents {
-    props: Vec<Property>,
-    children: Vec<Node>,
-    includes: Vec<String>,
-    deleted_props: Vec<String>,
-    deleted_nodes: Vec<NodeId>,
+    pub props: Vec<Property>,
+    pub children: Vec<Node>,
+    pub includes: Vec<String>,
+    pub deleted_props: Vec<String>,
+    pub deleted_nodes: Vec<NodeId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
-    name: String,
-    value: Option<Vec<PropertyValue>>,
+    pub name: String,
+    pub value: Option<Vec<PropertyValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

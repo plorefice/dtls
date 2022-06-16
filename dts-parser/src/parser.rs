@@ -1,6 +1,5 @@
 use std::{io::Read, str};
 
-use anyhow::{bail, Result};
 use nom::{
     branch::alt,
     bytes::complete::{escaped, is_a, is_not, tag, take_while_m_n},
@@ -21,17 +20,20 @@ type Input<'a> = &'a str;
 
 type IResult<'a, T, E> = nom::IResult<Input<'a>, T, E>;
 
+/// Parse a Device Tree from a string.
+pub fn from_str(s: &str) -> Result<Dts, String> {
+    match all_consuming(dts_file::<VerboseError<&str>>)(s).finish() {
+        Ok((_, dts)) => Ok(dts),
+        Err(e) => Err(convert_error(s, e)),
+    }
+}
+
 /// Parse a Device Tree source file.
-pub fn from_reader(mut r: impl Read) -> Result<Dts> {
+pub fn from_reader(mut r: impl Read) -> Result<Dts, String> {
     let mut dts = String::new();
-    r.read_to_string(&mut dts)?;
+    r.read_to_string(&mut dts).map_err(|e| e.to_string())?;
 
-    let dts = match all_consuming(dts_file::<VerboseError<&str>>)(&dts).finish() {
-        Ok((_, dts)) => dts,
-        Err(e) => bail!("{}", convert_error(dts.as_str(), e)),
-    };
-
-    Ok(dts)
+    from_str(dts.as_str())
 }
 
 /// Parse a Device Tree source file.
