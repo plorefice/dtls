@@ -32,7 +32,7 @@ pub fn from_str(s: &str) -> Result<Dts, nom::error::Error<Input>> {
 fn dts_file<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Dts, E> {
     enum TopLevelContents<'s> {
         Node(Node<'s>),
-        Include(Input<'s>),
+        Include(Include<'s>),
         VersionDirective,
         DeletedNodeDirective(NodeId<'s>),
         OmitIfNoRefDirective(NodeId<'s>),
@@ -63,7 +63,7 @@ fn dts_file<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Dts, 
             for content in contents {
                 match content {
                     TopLevelContents::Node(node) => dts.nodes.push(node),
-                    TopLevelContents::Include(e) => dts.includes.push(str::from_utf8(e).unwrap()),
+                    TopLevelContents::Include(inc) => dts.includes.push(inc),
                     TopLevelContents::VersionDirective => dts.version = DtsVersion::V1,
                     TopLevelContents::DeletedNodeDirective(n) => dts.deleted_nodes.push(n),
                     TopLevelContents::OmitIfNoRefDirective(n) => dts.omitted_nodes.push(n),
@@ -153,7 +153,7 @@ fn root_node_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a,
 
 /// Parse the body of a device tree node.
 fn node_body<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeContents, E> {
-    preceded(braces_start, cut(terminated(node_contents, braces_end)))(input)
+    preceded(left_brace, cut(terminated(node_contents, right_brace)))(input)
 }
 
 /// Parse a list of node labels.
@@ -171,7 +171,7 @@ fn node_contents<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
     enum NodeContent<'s> {
         Node(Node<'s>),
         Prop(Property<'s>),
-        Include(Input<'s>),
+        Include(Include<'s>),
         DeletedProp(Input<'s>),
         DeletedNode(NodeId<'s>),
     }
@@ -194,9 +194,7 @@ fn node_contents<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
                     match elem {
                         NodeContent::Prop(p) => contents.props.push(p),
                         NodeContent::Node(c) => contents.children.push(c),
-                        NodeContent::Include(c) => {
-                            contents.includes.push(str::from_utf8(c).unwrap())
-                        }
+                        NodeContent::Include(inc) => contents.includes.push(inc),
                         NodeContent::DeletedProp(c) => {
                             contents.deleted_props.push(str::from_utf8(c).unwrap())
                         }
@@ -252,11 +250,7 @@ fn prop_value_bits<'a, E: ParseError<Input<'a>>>(
         tuple((
             bits_keyword,
             cut(dec),
-            cut(delimited(
-                cell_array_start,
-                many1(integer_expr),
-                cell_array_end,
-            )),
+            cut(delimited(left_chevron, many1(expression), right_chevron)),
         )),
         |(_, n, bits)| PropertyValue::Bits(n as u32, bits),
     )(input)
@@ -284,10 +278,10 @@ fn prop_value_cell_array<'a, E: ParseError<Input<'a>>>(
 ) -> IResult<'a, PropertyValue, E> {
     map(
         preceded(
-            cell_array_start,
+            left_chevron,
             cut(terminated(
                 many0(alt((prop_cell_expr, prop_cell_ref))),
-                cell_array_end,
+                right_chevron,
             )),
         ),
         PropertyValue::CellArray,
@@ -300,8 +294,8 @@ fn prop_value_bytestring<'a, E: ParseError<Input<'a>>>(
 ) -> IResult<'a, PropertyValue, E> {
     map(
         preceded(
-            bracket_start,
-            cut(terminated(many1(lexeme(hex_byte)), bracket_end)),
+            left_bracket,
+            cut(terminated(many1(lexeme(hex_byte)), right_bracket)),
         ),
         PropertyValue::Bytestring,
     )(input)
@@ -314,7 +308,7 @@ fn prop_cell_ref<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
 
 /// Parse a property cell containing an integer expression.
 fn prop_cell_expr<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyCell, E> {
-    lexeme(map(integer_expr, PropertyCell::Expr))(input)
+    lexeme(map(expression, PropertyCell::Expr))(input)
 }
 
 /// Parse a deleted node.
@@ -354,7 +348,7 @@ fn node_reference<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a,
     let node_ref = map(
         alt((
             node_label_str,
-            delimited(braces_start, node_path, braces_end),
+            delimited(left_brace, node_path, right_brace),
         )),
         |s: Input| Reference(str::from_utf8(s).unwrap()),
     );
@@ -395,30 +389,24 @@ fn node_address_identifier<'a, E: ParseError<Input<'a>>>(
 ///
 /// Valid expressions include a single integer literal (e.g. `<0>`) or a parenthesized expression
 /// (e.g. `<(1 << 1)>`).
-fn integer_expr<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
-    alt((integer_expr_lit, integer_expr_parens))(input)
+fn expression<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+    alt((expression_lit, expression_parens))(input)
 }
 
 /// Parse a valid integer literal expression in a property cell.
-fn integer_expr_lit<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
-    map(integer_literal, IntegerExpression::Lit)(input)
+fn expression_lit<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+    map(integer_literal, Expression::Lit)(input)
 }
 
 /// Parse a valid parenthesized integer expression in a property cell.
 ///
 /// Parenthesized expressions may contain a single term or an inner parenthesized expression.
-fn integer_expr_parens<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
+fn expression_parens<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
     preceded(
-        paren_start,
+        left_paren,
         cut(terminated(
-            alt((integer_expr_term, integer_expr_parens)),
-            paren_end,
+            alt((expression_term, expression_parens)),
+            right_paren,
         )),
     )(input)
 }
@@ -427,36 +415,31 @@ fn integer_expr_parens<'a, E: ParseError<Input<'a>>>(
 ///
 /// A term may be a single integer literal, a binary operator applied to two terms
 /// or a unary operator applied to a single term.
-fn integer_expr_term<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
-    alt((integer_expr_binary, integer_expr_unary, integer_expr_lit))(input)
+fn expression_term<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+    alt((expression_binary, expression_unary, expression_lit))(input)
 }
 
 /// Parse a valid binary integer expression term in a property cell.
-fn integer_expr_binary<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
+fn expression_binary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
     map(
         tuple((
-            integer_expr,
+            expression,
             arith_operator_binary,
-            cut(alt((integer_expr_term, integer_expr_parens))),
+            cut(alt((expression_term, expression_parens))),
         )),
-        |(left, op, right)| IntegerExpression::Binary(Box::new(left), op, Box::new(right)),
+        |(left, op, right)| Expression::Binary(Box::new(left), op, Box::new(right)),
     )(input)
 }
 
 /// Parse a valid unary integer expression term in a property cell.
-fn integer_expr_unary<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerExpression, E> {
+fn expression_unary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
     map(
-        tuple((arith_operator_unary, cut(integer_expr))),
-        |(op, right)| IntegerExpression::Unary(op, Box::new(right)),
+        tuple((arith_operator_unary, cut(expression))),
+        |(op, right)| Expression::Unary(op, Box::new(right)),
     )(input)
 }
 
+/// Parse an integer literal valid in the context of an expression.
 fn integer_literal<'a, E: ParseError<Input<'a>>>(
     input: Input<'a>,
 ) -> IResult<'a, IntegerLiteral, E> {
@@ -482,10 +465,38 @@ fn char_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, c
 }
 
 /// Parse a valid include directive.
-fn include_directive<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
-    preceded(
-        include_keyword,
-        cut(delimited(double_quote, include_path_str, double_quote)),
+///
+/// The parser recognizes both C-style include directives (i.e. `#include "foo.h"`)
+/// and Devicetree-style include directives (i.e. `/include/ "foo.h"`).
+fn include_directive<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Include<'a>, E> {
+    alt((include_directive_cpp, include_directive_dts))(input)
+}
+
+/// Parse a valid C-style include directive.
+fn include_directive_cpp<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Include<'a>, E> {
+    let quoted = delimited(double_quote, include_path_str, double_quote);
+    let bracketed = delimited(left_chevron, include_path_str, right_chevron);
+
+    map(
+        preceded(include_cpp_keyword, cut(alt((quoted, bracketed)))),
+        |path: Input| Include::C(str::from_utf8(path).unwrap()),
+    )(input)
+}
+
+/// Parse a valid Devicetree-style include directive.
+fn include_directive_dts<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Include<'a>, E> {
+    map(
+        preceded(
+            include_dts_keyword,
+            cut(delimited(double_quote, include_path_str, double_quote)),
+        ),
+        |path: Input| Include::Dts(str::from_utf8(path).unwrap()),
     )(input)
 }
 
@@ -521,43 +532,43 @@ fn label_separator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a
     lexeme(char(':'))(input)
 }
 
-/// Recognize the start of a brace.
-fn braces_start<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+/// Recognize an opening brace.
+fn left_brace<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('{'))(input)
 }
 
-/// Recognize the end of a brace.
-fn braces_end<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+/// Recognize a closing brace.
+fn right_brace<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('}'))(input)
 }
 
-/// Recognize the start of a cell array.
-fn cell_array_start<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+/// Recognize an opening chevron.
+fn left_chevron<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('<'))(input)
 }
 
-/// Recognize the end of a cell array.
-fn cell_array_end<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+/// Recognize a closing chevron.
+fn right_chevron<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('>'))(input)
 }
 
-/// Recognize the start of a parenthesis.
-fn paren_start<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+/// Recognize an opening parenthesis.
+fn left_paren<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('('))(input)
 }
 
-/// Recognize the end of a parenthesis.
-fn paren_end<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+/// Recognize a closing parenthesis.
+fn right_paren<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char(')'))(input)
 }
 
-/// Recognize the start of a bracket.
-fn bracket_start<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+/// Recognize an opening bracket.
+fn left_bracket<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char('['))(input)
 }
 
-/// Recognize the end of a bracket.
-fn bracket_end<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+/// Recognize a closing bracket.
+fn right_bracket<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
     lexeme(char(']'))(input)
 }
 
@@ -675,8 +686,17 @@ fn prop_name_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+?#-")))))(input)
 }
 
-/// Recognize an include directive prefix.
-fn include_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+/// Recognize a C preprocessor include directive prefix.
+fn include_cpp_keyword<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Input<'a>, E> {
+    lexeme(tag("#include"))(input)
+}
+
+/// Recognize a Devicetree include directive prefix.
+fn include_dts_keyword<'a, E: ParseError<Input<'a>>>(
+    input: Input<'a>,
+) -> IResult<'a, Input<'a>, E> {
     lexeme(tag("/include/"))(input)
 }
 
@@ -830,7 +850,7 @@ mod tests {
 
     #[test]
     fn parse_properties() {
-        use IntegerExpression::*;
+        use Expression::*;
         use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;
@@ -936,7 +956,7 @@ mod tests {
 
     #[test]
     fn parse_root_node() {
-        use IntegerExpression::*;
+        use Expression::*;
         use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;
@@ -969,7 +989,7 @@ mod tests {
 
     #[test]
     fn parse_inner_node() {
-        use IntegerExpression::*;
+        use Expression::*;
         use IntegerLiteral::*;
         use PropertyCell::*;
         use PropertyValue::*;
@@ -1112,12 +1132,25 @@ mod tests {
     #[test]
     fn parse_includes() {
         for (input, exp) in [
-            (r#"/include/ "sama5.dtsi""#, "sama5.dtsi"),
-            (r#"/include/ "inner/sample.dtsi""#, "inner/sample.dtsi"),
+            (r#"/include/ "sama5.dtsi""#, Include::Dts("sama5.dtsi")),
+            (
+                r#"/include/ "inner/sample.dtsi""#,
+                Include::Dts("inner/sample.dtsi"),
+            ),
+            (r#"#include "sama5.dtsi""#, Include::C("sama5.dtsi")),
+            (
+                r#"#include "inner/sample.dtsi""#,
+                Include::C("inner/sample.dtsi"),
+            ),
+            (r#"#include <sama5.dtsi>"#, Include::C("sama5.dtsi")),
+            (
+                r#"#include <inner/sample.dtsi>"#,
+                Include::C("inner/sample.dtsi"),
+            ),
         ] {
             assert_eq!(
                 include_directive::<Error<Input>>(input.as_bytes()),
-                Ok((&b""[..], exp.as_bytes()))
+                Ok((&b""[..], exp))
             );
         }
     }
