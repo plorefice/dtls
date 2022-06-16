@@ -8,7 +8,7 @@ use nom::{
         u64,
     },
     combinator::{all_consuming, cut, map, opt, recognize},
-    error::ParseError,
+    error::Error,
     multi::{fold_many0, many0, many1, many_m_n, many_till, separated_list1},
     sequence::{delimited, pair, preceded, terminated, tuple},
     AsChar, Finish,
@@ -19,10 +19,10 @@ use crate::ast::*;
 
 type Span<'a> = LocatedSpan<&'a [u8]>;
 type Input<'a> = Span<'a>;
-type IResult<'a, T, E> = nom::IResult<Input<'a>, T, E>;
+type IResult<'a, T> = nom::IResult<Input<'a>, T>;
 
 /// Parse a Device Tree from a string.
-pub fn from_str(s: &str) -> Result<Root, nom::error::Error<Input>> {
+pub fn from_str(s: &str) -> Result<Root, Error<Input>> {
     let input = Span::new(s.as_bytes());
 
     match all_consuming(root)(input).finish() {
@@ -32,7 +32,7 @@ pub fn from_str(s: &str) -> Result<Root, nom::error::Error<Input>> {
 }
 
 /// Parse a Device Tree source file.
-fn root<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Root, E> {
+fn root(input: Input) -> IResult<Root> {
     let (input, items) = fold_many0(
         alt((
             map(root_node, RootItem::Node),
@@ -54,7 +54,7 @@ fn root<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Root, E> 
 }
 
 /// Parse a version directive.
-fn version_directive<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, DtsVersion, E> {
+fn version_directive(input: Input) -> IResult<DtsVersion> {
     map(terminated(dts_v1_keyword, cut(terminator)), |_| {
         DtsVersion::V1
     })(input)
@@ -63,7 +63,7 @@ fn version_directive<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<
 /// Parse a valid root node.
 ///
 /// The root node is a top-level named node in the file and its name should always be '/'.
-fn root_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node, E> {
+fn root_node(input: Input) -> IResult<Node> {
     map(
         tuple((root_node_name, node_body, cut(terminator))),
         |(name, contents, _)| Node {
@@ -78,7 +78,7 @@ fn root_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node
 ///
 /// Node overrides are only valid in the top-level of the file and their name should be
 /// a valid node reference.
-fn node_override<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node, E> {
+fn node_override(input: Input) -> IResult<Node> {
     map(
         tuple((
             opt(omit_if_no_ref_keyword),
@@ -102,7 +102,7 @@ fn node_override<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
 /// Parse a valid inner node.
 ///
 /// Inner nodes are only valid within the body of a node. Their name should be a valid node name.
-fn inner_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node, E> {
+fn inner_node(input: Input) -> IResult<Node> {
     map(
         tuple((
             opt(omit_if_no_ref_keyword),
@@ -124,27 +124,27 @@ fn inner_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Nod
 }
 
 /// Recognize the name of a root node.
-fn root_node_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn root_node_name(input: Input) -> IResult<Input> {
     lexeme(tag("/"))(input)
 }
 
 /// Parse the body of a device tree node.
-fn node_body<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Vec<NodeItem>, E> {
+fn node_body(input: Input) -> IResult<Vec<NodeItem>> {
     preceded(left_brace, cut(terminated(node_contents, right_brace)))(input)
 }
 
 /// Parse a list of node labels.
-fn node_labels<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Vec<Input<'a>>, E> {
+fn node_labels(input: Input) -> IResult<Vec<Input>> {
     many0(terminated(node_label, label_separator))(input)
 }
 
 /// Parse a node label.
-fn node_label<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn node_label(input: Input) -> IResult<Input> {
     lexeme(node_label_str)(input)
 }
 
 /// Parse the contents of a node.
-fn node_contents<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Vec<NodeItem>, E> {
+fn node_contents(input: Input) -> IResult<Vec<NodeItem>> {
     fold_many0(
         alt((
             map(include_directive, NodeItem::Include),
@@ -164,7 +164,7 @@ fn node_contents<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, 
 }
 
 /// Parse a node property.
-fn property<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Property, E> {
+fn property(input: Input) -> IResult<Property> {
     map(
         tuple((
             prop_name,
@@ -179,14 +179,12 @@ fn property<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Prope
 }
 
 /// Parse a propery name.
-fn prop_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn prop_name(input: Input) -> IResult<Input> {
     lexeme(prop_name_str)(input)
 }
 
 /// Parse a property value list.
-fn prop_values<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Vec<PropertyValue>, E> {
+fn prop_values(input: Input) -> IResult<Vec<PropertyValue>> {
     separated_list1(
         list_separator,
         alt((
@@ -200,9 +198,7 @@ fn prop_values<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse a property value corresponding to the `/bits/` keyword followed by its arguments.
-fn prop_value_bits<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, PropertyValue, E> {
+fn prop_value_bits(input: Input) -> IResult<PropertyValue> {
     map(
         tuple((
             bits_keyword,
@@ -214,14 +210,12 @@ fn prop_value_bits<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse a property value corresponding to a reference to another node.
-fn prop_value_alias<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, PropertyValue, E> {
+fn prop_value_alias(input: Input) -> IResult<PropertyValue> {
     map(node_reference, PropertyValue::Ref)(input)
 }
 
 /// Parse a property value corresponding to a string.
-fn prop_value_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyValue, E> {
+fn prop_value_str(input: Input) -> IResult<PropertyValue> {
     lexeme(map(string_literal, |s: Input| {
         PropertyValue::Str(str::from_utf8(s.fragment()).unwrap())
     }))(input)
@@ -230,9 +224,7 @@ fn prop_value_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a,
 /// Parse a property value corresponding to a cell array.
 ///
 /// A cell array can be empty.
-fn prop_value_cell_array<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, PropertyValue, E> {
+fn prop_value_cell_array(input: Input) -> IResult<PropertyValue> {
     map(
         preceded(
             left_chevron,
@@ -246,9 +238,7 @@ fn prop_value_cell_array<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse a property value corresponding to a byte string.
-fn prop_value_bytestring<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, PropertyValue, E> {
+fn prop_value_bytestring(input: Input) -> IResult<PropertyValue> {
     map(
         preceded(
             left_bracket,
@@ -259,17 +249,17 @@ fn prop_value_bytestring<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse a property cell containing a reference to another node.
-fn prop_cell_ref<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyCell, E> {
+fn prop_cell_ref(input: Input) -> IResult<PropertyCell> {
     map(node_reference, PropertyCell::Ref)(input)
 }
 
 /// Parse a property cell containing an integer expression.
-fn prop_cell_expr<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, PropertyCell, E> {
+fn prop_cell_expr(input: Input) -> IResult<PropertyCell> {
     lexeme(map(expression, PropertyCell::Expr))(input)
 }
 
 /// Parse a deleted node.
-fn deleted_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeId, E> {
+fn deleted_node(input: Input) -> IResult<NodeId> {
     delimited(
         delete_node_keyword,
         cut(alt((node_name, map(node_reference, NodeId::Ref)))),
@@ -278,12 +268,12 @@ fn deleted_node<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, N
 }
 
 /// Parse a deleted property.
-fn deleted_property<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn deleted_property(input: Input) -> IResult<Input> {
     delimited(delete_property_keyword, cut(prop_name), cut(terminator))(input)
 }
 
 /// Parse a valid memreserve directive.
-fn memreserve<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, (u64, u64), E> {
+fn memreserve(input: Input) -> IResult<(u64, u64)> {
     delimited(
         memreserve_keyword,
         cut(pair(unsigned_literal, unsigned_literal)),
@@ -292,7 +282,7 @@ fn memreserve<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, (u6
 }
 
 /// Parse a valid omitted node directive.
-fn omit_if_no_ref<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeId, E> {
+fn omit_if_no_ref(input: Input) -> IResult<NodeId> {
     delimited(
         omit_if_no_ref_keyword,
         cut(alt((node_name, map(node_reference, NodeId::Ref)))),
@@ -301,7 +291,7 @@ fn omit_if_no_ref<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a,
 }
 
 /// Parse a valid node reference.
-fn node_reference<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Reference, E> {
+fn node_reference(input: Input) -> IResult<Reference> {
     let node_ref = map(
         alt((
             node_label_str,
@@ -316,7 +306,7 @@ fn node_reference<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a,
 /// Parse a valid node name.
 ///
 /// A node name is composed of node-name part and an optional unit-address in hex format.
-fn node_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, NodeId, E> {
+fn node_name(input: Input) -> IResult<NodeId> {
     map(
         tuple((node_name_identifier, opt(node_address_identifier))),
         |(name, address)| {
@@ -329,16 +319,12 @@ fn node_name<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Node
 }
 
 /// Parse a valid node name identifier, i.e. the part of the node name before the unit-address.
-fn node_name_identifier<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Input<'a>, E> {
+fn node_name_identifier(input: Input) -> IResult<Input> {
     lexeme(node_name_str)(input)
 }
 
 /// Parse a valid node unit-address identifier.
-fn node_address_identifier<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Input<'a>, E> {
+fn node_address_identifier(input: Input) -> IResult<Input> {
     preceded(char('@'), cut(node_name_str))(input)
 }
 
@@ -346,19 +332,19 @@ fn node_address_identifier<'a, E: ParseError<Input<'a>>>(
 ///
 /// Valid expressions include a single integer literal (e.g. `<0>`) or a parenthesized expression
 /// (e.g. `<(1 << 1)>`).
-fn expression<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+fn expression(input: Input) -> IResult<Expression> {
     alt((expression_lit, expression_parens))(input)
 }
 
 /// Parse a valid integer literal expression in a property cell.
-fn expression_lit<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+fn expression_lit(input: Input) -> IResult<Expression> {
     map(integer_literal, Expression::Lit)(input)
 }
 
 /// Parse a valid parenthesized integer expression in a property cell.
 ///
 /// Parenthesized expressions may contain a single term or an inner parenthesized expression.
-fn expression_parens<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+fn expression_parens(input: Input) -> IResult<Expression> {
     preceded(
         left_paren,
         cut(terminated(
@@ -372,7 +358,7 @@ fn expression_parens<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<
 ///
 /// A term may be a single integer literal, a binary operator applied to two terms,
 /// a unary operator applied to a single term or a ternaty conditional operator.
-fn expression_term<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+fn expression_term(input: Input) -> IResult<Expression> {
     alt((
         expression_ternary,
         expression_binary,
@@ -382,7 +368,7 @@ fn expression_term<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a
 }
 
 /// Parse a valid binary integer expression term in a property cell.
-fn expression_binary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+fn expression_binary(input: Input) -> IResult<Expression> {
     map(
         tuple((
             expression,
@@ -394,7 +380,7 @@ fn expression_binary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<
 }
 
 /// Parse a valid unary integer expression term in a property cell.
-fn expression_unary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Expression, E> {
+fn expression_unary(input: Input) -> IResult<Expression> {
     map(
         tuple((arith_operator_unary, cut(expression))),
         |(op, right)| Expression::Unary(op, Box::new(right)),
@@ -402,9 +388,7 @@ fn expression_unary<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'
 }
 
 /// Parse a valid ternary expression in a property cell.
-fn expression_ternary<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Expression, E> {
+fn expression_ternary(input: Input) -> IResult<Expression> {
     map(
         tuple((
             expression,
@@ -422,9 +406,7 @@ fn expression_ternary<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse an integer literal valid in the context of an expression.
-fn integer_literal<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, IntegerLiteral, E> {
+fn integer_literal(input: Input) -> IResult<IntegerLiteral> {
     alt((
         map(numeric_literal, IntegerLiteral::Num),
         map(char_literal, IntegerLiteral::Char),
@@ -432,17 +414,17 @@ fn integer_literal<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse a valid unsigned integer number in any base.
-fn unsigned_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u64, E> {
+fn unsigned_literal(input: Input) -> IResult<u64> {
     lexeme(alt((unsigned_hex, unsigned_dec)))(input)
 }
 
 /// Parse a valid signed integer number in any base.
-fn numeric_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, i64, E> {
+fn numeric_literal(input: Input) -> IResult<i64> {
     lexeme(alt((hex, dec)))(input)
 }
 
 /// Parse a valid character literal.
-fn char_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn char_literal(input: Input) -> IResult<char> {
     delimited(char('\''), cut(anychar), cut(char('\'')))(input)
 }
 
@@ -450,16 +432,12 @@ fn char_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, c
 ///
 /// The parser recognizes both C-style include directives (i.e. `#include "foo.h"`)
 /// and Devicetree-style include directives (i.e. `/include/ "foo.h"`).
-fn include_directive<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Include<'a>, E> {
+fn include_directive(input: Input) -> IResult<Include> {
     alt((include_directive_cpp, include_directive_dts))(input)
 }
 
 /// Parse a valid C-style include directive.
-fn include_directive_cpp<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Include<'a>, E> {
+fn include_directive_cpp(input: Input) -> IResult<Include> {
     let quoted = delimited(double_quote, include_path_str, double_quote);
     let bracketed = delimited(left_chevron, include_path_str, right_chevron);
 
@@ -470,9 +448,7 @@ fn include_directive_cpp<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse a valid Devicetree-style include directive.
-fn include_directive_dts<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Include<'a>, E> {
+fn include_directive_dts(input: Input) -> IResult<Include> {
     map(
         preceded(
             include_dts_keyword,
@@ -483,108 +459,104 @@ fn include_directive_dts<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse a valid string literal.
-fn string_literal<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn string_literal(input: Input) -> IResult<Input> {
     preceded(double_quote, cut(terminated(printable_ascii, double_quote)))(input)
 }
 
 /* === Low-level syntax parsers === */
 
 /// Recognize a double-quote character.
-fn double_quote<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn double_quote(input: Input) -> IResult<char> {
     lexeme(char('"'))(input)
 }
 
 /// Recognize an assigment operator.
-fn assignment<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn assignment(input: Input) -> IResult<char> {
     lexeme(char('='))(input)
 }
 
 /// Recognize a statement terminator.
-fn terminator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn terminator(input: Input) -> IResult<char> {
     lexeme(char(';'))(input)
 }
 
 /// Recognize a list separator.
-fn list_separator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn list_separator(input: Input) -> IResult<char> {
     lexeme(char(','))(input)
 }
 
 /// Recognize a label separator.
-fn label_separator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn label_separator(input: Input) -> IResult<char> {
     lexeme(char(':'))(input)
 }
 
 /// Recognize an opening brace.
-fn left_brace<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn left_brace(input: Input) -> IResult<char> {
     lexeme(char('{'))(input)
 }
 
 /// Recognize a closing brace.
-fn right_brace<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn right_brace(input: Input) -> IResult<char> {
     lexeme(char('}'))(input)
 }
 
 /// Recognize an opening chevron.
-fn left_chevron<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn left_chevron(input: Input) -> IResult<char> {
     lexeme(char('<'))(input)
 }
 
 /// Recognize a closing chevron.
-fn right_chevron<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn right_chevron(input: Input) -> IResult<char> {
     lexeme(char('>'))(input)
 }
 
 /// Recognize an opening parenthesis.
-fn left_paren<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn left_paren(input: Input) -> IResult<char> {
     lexeme(char('('))(input)
 }
 
 /// Recognize a closing parenthesis.
-fn right_paren<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn right_paren(input: Input) -> IResult<char> {
     lexeme(char(')'))(input)
 }
 
 /// Recognize an opening bracket.
-fn left_bracket<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn left_bracket(input: Input) -> IResult<char> {
     lexeme(char('['))(input)
 }
 
 /// Recognize a closing bracket.
-fn right_bracket<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn right_bracket(input: Input) -> IResult<char> {
     lexeme(char(']'))(input)
 }
 
 /// Recognize a reference operator.
-fn reference_operator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn reference_operator(input: Input) -> IResult<char> {
     lexeme(char('&'))(input)
 }
 
 /// Recognize a ternary `?` operator.
-fn ternary_if_operator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn ternary_if_operator(input: Input) -> IResult<char> {
     lexeme(char('?'))(input)
 }
 
 /// Recognize a ternary `:` operator.
-fn ternary_else_operator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn ternary_else_operator(input: Input) -> IResult<char> {
     lexeme(char(':'))(input)
 }
 
 /// Recognize a path separator.
-fn path_separator<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, char, E> {
+fn path_separator(input: Input) -> IResult<char> {
     lexeme(char('/'))(input)
 }
 
 /// Recognize an arithmetic unary operator.
-fn arith_operator_unary<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, UnaryOperator, E> {
+fn arith_operator_unary(input: Input) -> IResult<UnaryOperator> {
     lexeme(map(tag("~"), |_| UnaryOperator::BitNot))(input)
 }
 
 /// Recognize an arithmetic binary operator.
-fn arith_operator_binary<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, BinaryOperator, E> {
+fn arith_operator_binary(input: Input) -> IResult<BinaryOperator> {
     lexeme(alt((
         map(tag("<<"), |_| BinaryOperator::LShift),
         map(tag(">>"), |_| BinaryOperator::RShift),
@@ -605,12 +577,12 @@ fn arith_operator_binary<'a, E: ParseError<Input<'a>>>(
 }
 
 /// Parse a signed integer number in base 16, prefixed by `0x`.
-fn hex<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, i64, E> {
+fn hex(input: Input) -> IResult<i64> {
     map(unsigned_hex, |d| d as i64)(input)
 }
 
 /// Parse an usigned integer number in base 16, prefixed by `0x`.
-fn unsigned_hex<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u64, E> {
+fn unsigned_hex(input: Input) -> IResult<u64> {
     map(
         preceded(alt((tag("0x"), tag("0X"))), cut(hex_digit1)),
         |s: Input| {
@@ -622,17 +594,17 @@ fn unsigned_hex<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u
 }
 
 /// Parse a signed integer number in base 10.
-fn dec<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, i64, E> {
+fn dec(input: Input) -> IResult<i64> {
     i64(input)
 }
 
 /// Parse an unsigned integer number in base 10.
-fn unsigned_dec<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u64, E> {
+fn unsigned_dec(input: Input) -> IResult<u64> {
     u64(input)
 }
 
 /// Parse a byte represented by two hex digits.
-fn hex_byte<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u8, E> {
+fn hex_byte(input: Input) -> IResult<u8> {
     map(
         take_while_m_n(2, 2, |c: u8| c.is_hex_digit()),
         |s: Input| {
@@ -644,7 +616,7 @@ fn hex_byte<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, u8, E
 }
 
 /// Recognize a sequence of printable ASCII characters.
-fn printable_ascii<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn printable_ascii(input: Input) -> IResult<Input> {
     recognize(many0(escaped(
         alt((
             alphanumeric1,
@@ -657,22 +629,22 @@ fn printable_ascii<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a
 }
 
 /// Recognize a valid path in an `/include/` directive.
-fn include_path_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn include_path_str(input: Input) -> IResult<Input> {
     recognize(separated_list1(path_separator, is_not("/\0\"<>")))(input)
 }
 
 /// Recognize a valid node name string.
-fn node_name_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn node_name_str(input: Input) -> IResult<Input> {
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+-")))))(input)
 }
 
 /// Recognize a valid node label string.
-fn node_label_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn node_label_str(input: Input) -> IResult<Input> {
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a("_")))))(input)
 }
 
 /// Recognize a valid node path.
-fn node_path<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn node_path(input: Input) -> IResult<Input> {
     recognize(preceded(
         path_separator,
         separated_list1(path_separator, node_name),
@@ -680,57 +652,47 @@ fn node_path<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Inpu
 }
 
 /// Recognize a valid property name string.
-fn prop_name_str<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn prop_name_str(input: Input) -> IResult<Input> {
     recognize(many_m_n(1, 31, alt((alphanumeric1, is_a(",._+?#-")))))(input)
 }
 
 /// Recognize a C preprocessor include directive prefix.
-fn include_cpp_keyword<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Input<'a>, E> {
+fn include_cpp_keyword(input: Input) -> IResult<Input> {
     lexeme(tag("#include"))(input)
 }
 
 /// Recognize a Devicetree include directive prefix.
-fn include_dts_keyword<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Input<'a>, E> {
+fn include_dts_keyword(input: Input) -> IResult<Input> {
     lexeme(tag("/include/"))(input)
 }
 
 /// Recognize the `/bits/` keyword.
-fn bits_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn bits_keyword(input: Input) -> IResult<Input> {
     lexeme(tag("/bits/"))(input)
 }
 
 /// Recognize the `/memreserve/` keyword.
-fn memreserve_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn memreserve_keyword(input: Input) -> IResult<Input> {
     lexeme(tag("/memreserve/"))(input)
 }
 
 /// Recognize the `/delete-node/` keyword.
-fn delete_node_keyword<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Input<'a>, E> {
+fn delete_node_keyword(input: Input) -> IResult<Input> {
     lexeme(tag("/delete-node/"))(input)
 }
 
 /// Recognize the `/delete-property/` keyword.
-fn delete_property_keyword<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Input<'a>, E> {
+fn delete_property_keyword(input: Input) -> IResult<Input> {
     lexeme(tag("/delete-property/"))(input)
 }
 
 /// Recognize the `/omit-if-no-ref/` keyword.
-fn omit_if_no_ref_keyword<'a, E: ParseError<Input<'a>>>(
-    input: Input<'a>,
-) -> IResult<'a, Input<'a>, E> {
+fn omit_if_no_ref_keyword(input: Input) -> IResult<Input> {
     lexeme(tag("/omit-if-no-ref/"))(input)
 }
 
 /// Recognize the `/dts-v1/` keyword.
-fn dts_v1_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn dts_v1_keyword(input: Input) -> IResult<Input> {
     lexeme(tag("/dts-v1/"))(input)
 }
 
@@ -738,27 +700,27 @@ fn dts_v1_keyword<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a,
 
 /// Parse a lexeme using the combinator passed as its argument,
 /// also consuming any whitespaces or comments before or after.
-fn lexeme<'a, O, F, E: ParseError<Input<'a>>>(f: F) -> impl FnMut(Input<'a>) -> IResult<'a, O, E>
+fn lexeme<'a, O, F>(f: F) -> impl FnMut(Input<'a>) -> IResult<'a, O>
 where
-    F: FnMut(Input<'a>) -> IResult<'a, O, E>,
+    F: FnMut(Input<'a>) -> IResult<'a, O>,
 {
     delimited(ws, f, ws)
 }
 
 /// Consume zero or more whitespace characters or comments.
-fn ws<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn ws(input: Input) -> IResult<Input> {
     recognize(many0(alt((multispace1, line_comment, block_comment))))(input)
 }
 
 /// Parse block comments.
-fn block_comment<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn block_comment(input: Input) -> IResult<Input> {
     recognize(preceded(tag("/*"), many_till(anychar, tag("*/"))))(input)
 }
 
 /// Parse a single line comment.
 ///
 /// The parser stops just before the newline character but doesn't consume the newline.
-fn line_comment<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, Input<'a>, E> {
+fn line_comment(input: Input) -> IResult<Input> {
     recognize(preceded(tag("//"), many_till(anychar, line_ending)))(input)
 }
 
@@ -768,14 +730,12 @@ fn line_comment<'a, E: ParseError<Input<'a>>>(input: Input<'a>) -> IResult<'a, I
 mod tests {
     use super::*;
 
-    use nom::error::Error;
-
     #[test]
     fn parse_escaped_strings() {
         for (input, exp) in [(r#""Escaped string: \"\\\"""#, r#"Escaped string: \"\\\""#)] {
             assert_eq!(
                 &exp.as_bytes(),
-                all_consuming(string_literal::<Error<Input>>)(input.as_bytes().into())
+                all_consuming(string_literal)(input.as_bytes().into())
                     .unwrap()
                     .1
                     .fragment()
@@ -786,21 +746,18 @@ mod tests {
     #[test]
     fn parse_line_comments() {
         let (_, res) =
-            all_consuming(line_comment::<Error<Input>>)((&b"// This is a comment\n"[..]).into())
-                .unwrap();
+            all_consuming(line_comment)((&b"// This is a comment\n"[..]).into()).unwrap();
         assert_eq!(res.fragment(), b"// This is a comment\n");
 
         let (rest, res) =
-            line_comment::<Error<Input>>((&b"// Multiline comments\nare not supported"[..]).into())
-                .unwrap();
+            line_comment((&b"// Multiline comments\nare not supported"[..]).into()).unwrap();
 
         assert_eq!(res.fragment(), b"// Multiline comments\n");
         assert_eq!(rest.fragment(), b"are not supported");
 
-        assert!(line_comment::<Error<Input>>(
-            (&br#"prop-name = "value"; // This is a comment"#[..]).into()
-        )
-        .is_err());
+        assert!(
+            line_comment((&br#"prop-name = "value"; // This is a comment"#[..]).into()).is_err()
+        );
     }
 
     #[test]
@@ -816,9 +773,7 @@ mod tests {
         ] {
             assert_eq!(
                 exp,
-                all_consuming(node_name::<Error<Input>>)(input.as_bytes().into())
-                    .unwrap()
-                    .1,
+                all_consuming(node_name)(input.as_bytes().into()).unwrap().1,
             );
         }
     }
@@ -828,7 +783,7 @@ mod tests {
         for label in ["L3", "L2_0", "L2_1", "mmc0", "eth0", "pinctrl_wifi_pin"] {
             assert_eq!(
                 &label.as_bytes(),
-                all_consuming(node_label::<Error<Input>>)(label.as_bytes().into())
+                all_consuming(node_label)(label.as_bytes().into())
                     .unwrap()
                     .1
                     .fragment()
@@ -852,7 +807,7 @@ mod tests {
         ] {
             assert_eq!(
                 &name.as_bytes(),
-                all_consuming(prop_name::<Error<Input>>)(name.as_bytes().into())
+                all_consuming(prop_name)(name.as_bytes().into())
                     .unwrap()
                     .1
                     .fragment()
@@ -961,9 +916,7 @@ mod tests {
         ] {
             assert_eq!(
                 exp,
-                all_consuming(property::<Error<Input>>)(input.as_bytes().into())
-                    .unwrap()
-                    .1,
+                all_consuming(property)(input.as_bytes().into()).unwrap().1,
             );
         }
     }
@@ -994,9 +947,7 @@ mod tests {
 
         assert_eq!(
             exp,
-            all_consuming(root_node::<Error<Input>>)(input.as_bytes().into())
-                .unwrap()
-                .1,
+            all_consuming(root_node)(input.as_bytes().into()).unwrap().1,
         );
     }
 
@@ -1140,7 +1091,7 @@ mod tests {
 
         assert_eq!(
             exp,
-            all_consuming(inner_node::<Error<Input>>)(input.as_bytes().into())
+            all_consuming(inner_node)(input.as_bytes().into())
                 .unwrap()
                 .1,
         );
@@ -1167,7 +1118,7 @@ mod tests {
         ] {
             assert_eq!(
                 exp,
-                all_consuming(include_directive::<Error<Input>>)(input.as_bytes().into())
+                all_consuming(include_directive)(input.as_bytes().into())
                     .unwrap()
                     .1,
             );
@@ -1184,7 +1135,7 @@ mod tests {
             ("/delete-property foo,bar;", None),
             ("foo,bar;", None),
         ] {
-            match deleted_property::<Error<Input>>(input.as_bytes().into()) {
+            match deleted_property(input.as_bytes().into()) {
                 Ok((rest, res)) => {
                     assert!(rest.is_empty());
                     assert_eq!(res.fragment(), &exp.unwrap().as_bytes());
@@ -1204,7 +1155,7 @@ mod tests {
             ),
             ("/delete-node/ &baz;", Some(NodeId::Ref(Reference("baz")))),
         ] {
-            match deleted_node::<Error<Input>>(input.as_bytes().into()) {
+            match deleted_node(input.as_bytes().into()) {
                 Ok((rest, res)) => {
                     assert!(rest.is_empty());
                     assert_eq!(res, exp.unwrap());
@@ -1225,7 +1176,7 @@ mod tests {
             ("/memreserve/;", None),
             ("/memreserve/", None),
         ] {
-            match memreserve::<Error<Input>>(input.as_bytes().into()) {
+            match memreserve(input.as_bytes().into()) {
                 Ok((rest, res)) => {
                     assert!(rest.is_empty());
                     assert_eq!(res, exp.unwrap());
@@ -1248,7 +1199,7 @@ mod tests {
                 Some(NodeId::Ref(Reference("baz"))),
             ),
         ] {
-            match omit_if_no_ref::<Error<Input>>(input.as_bytes().into()) {
+            match omit_if_no_ref(input.as_bytes().into()) {
                 Ok((rest, res)) => {
                     assert!(rest.is_empty());
                     assert_eq!(res, exp.unwrap());
@@ -1271,12 +1222,7 @@ mod tests {
             }),
         ]);
 
-        assert_eq!(
-            exp,
-            all_consuming(root::<Error<Input>>)(input.as_bytes().into())
-                .unwrap()
-                .1,
-        );
+        assert_eq!(exp, all_consuming(root)(input.as_bytes().into()).unwrap().1,);
     }
 
     #[test]
@@ -1290,7 +1236,7 @@ mod tests {
                             0
             )"#;
 
-        match expression::<Error<Input>>(input.as_bytes().into()).finish() {
+        match expression(input.as_bytes().into()).finish() {
             Ok((rest, _)) => assert!(rest.is_empty()),
             Err(e) => panic!("{}", std::str::from_utf8(e.input.fragment()).unwrap()),
         }
@@ -1399,7 +1345,7 @@ mod tests {
 "#;
 
         // Someday I'll write a proper test for the above file...
-        let (rest, _) = root::<Error<Input>>(input.as_bytes().into()).unwrap();
+        let (rest, _) = root(input.as_bytes().into()).unwrap();
         assert!(rest.is_empty());
     }
 }

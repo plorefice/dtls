@@ -1,14 +1,15 @@
 use std::{
     env,
     fs::File,
-    io::{BufReader, Read},
+    io::{self, BufReader, Read},
+    process, str,
 };
 
 fn main() {
     let reader: Box<dyn Read> = if let Some(fname) = env::args().nth(1) {
         Box::new(File::open(fname).unwrap())
     } else {
-        Box::new(std::io::stdin())
+        Box::new(io::stdin())
     };
 
     let source = {
@@ -19,9 +20,15 @@ fn main() {
 
     match dts_parser::from_str(source.as_str()) {
         Ok(ast) => println!("{:#?}", ast),
-        Err(e) => panic!(
-            "Failed on input: {}",
-            std::str::from_utf8(e.input.fragment()).unwrap()
-        ),
+        Err(e) => {
+            eprintln!(
+                "Error: <stdin>:{}.{} syntax error\n{}",
+                e.input.location_line(),
+                e.input.get_column(),
+                str::from_utf8(e.input.fragment()).unwrap()
+            );
+
+            process::exit(-1);
+        }
     }
 }
