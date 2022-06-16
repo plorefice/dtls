@@ -67,7 +67,7 @@ fn root_node(input: Input) -> IResult<Node> {
     map(
         tuple((root_node_name, node_body, cut(terminator))),
         |(name, contents, _)| Node {
-            id: NodeId::Name(str::from_utf8(name.fragment()).unwrap(), None),
+            id: NodeId::Name(String::from_utf8(name.fragment().to_vec()).unwrap(), None),
             contents,
             ..Default::default()
         },
@@ -91,7 +91,7 @@ fn node_override(input: Input) -> IResult<Node> {
             id: NodeId::Ref(reference),
             labels: labels
                 .into_iter()
-                .map(|s| str::from_utf8(s.fragment()).unwrap())
+                .map(|s| String::from_utf8(s.fragment().to_vec()).unwrap())
                 .collect(),
             contents,
             ommittable: omit.is_some(),
@@ -115,7 +115,7 @@ fn inner_node(input: Input) -> IResult<Node> {
             id: name,
             labels: labels
                 .into_iter()
-                .map(|s| str::from_utf8(s.fragment()).unwrap())
+                .map(|s| String::from_utf8(s.fragment().to_vec()).unwrap())
                 .collect(),
             contents,
             ommittable: omit.is_some(),
@@ -151,7 +151,7 @@ fn node_contents(input: Input) -> IResult<Vec<NodeItem>> {
             map(inner_node, NodeItem::ChildNode),
             map(property, NodeItem::Property),
             map(deleted_property, |s| {
-                NodeItem::DeletedProp(str::from_utf8(s.fragment()).unwrap())
+                NodeItem::DeletedProp(String::from_utf8(s.fragment().to_vec()).unwrap())
             }),
             map(deleted_node, NodeItem::DeletedNode),
         )),
@@ -172,7 +172,7 @@ fn property(input: Input) -> IResult<Property> {
             cut(terminator),
         )),
         |(name, value, _)| Property {
-            name: str::from_utf8(name.fragment()).unwrap(),
+            name: String::from_utf8(name.fragment().to_vec()).unwrap(),
             value,
         },
     )(input)
@@ -217,7 +217,7 @@ fn prop_value_alias(input: Input) -> IResult<PropertyValue> {
 /// Parse a property value corresponding to a string.
 fn prop_value_str(input: Input) -> IResult<PropertyValue> {
     lexeme(map(string_literal, |s: Input| {
-        PropertyValue::Str(str::from_utf8(s.fragment()).unwrap())
+        PropertyValue::Str(String::from_utf8(s.fragment().to_vec()).unwrap())
     }))(input)
 }
 
@@ -297,7 +297,7 @@ fn node_reference(input: Input) -> IResult<Reference> {
             node_label_str,
             delimited(left_brace, node_path, right_brace),
         )),
-        |s: Input| Reference(str::from_utf8(s.fragment()).unwrap()),
+        |s: Input| Reference(String::from_utf8(s.fragment().to_vec()).unwrap()),
     );
 
     preceded(reference_operator, cut(node_ref))(input)
@@ -311,8 +311,8 @@ fn node_name(input: Input) -> IResult<NodeId> {
         tuple((node_name_identifier, opt(node_address_identifier))),
         |(name, address)| {
             NodeId::Name(
-                str::from_utf8(name.fragment()).unwrap(),
-                address.map(|s| str::from_utf8(s.fragment()).unwrap()),
+                String::from_utf8(name.fragment().to_vec()).unwrap(),
+                address.map(|s| String::from_utf8(s.fragment().to_vec()).unwrap()),
             )
         },
     )(input)
@@ -443,7 +443,7 @@ fn include_directive_cpp(input: Input) -> IResult<Include> {
 
     map(
         preceded(include_cpp_keyword, cut(alt((quoted, bracketed)))),
-        |path: Input| Include::C(str::from_utf8(path.fragment()).unwrap()),
+        |path: Input| Include::C(String::from_utf8(path.fragment().to_vec()).unwrap()),
     )(input)
 }
 
@@ -454,7 +454,7 @@ fn include_directive_dts(input: Input) -> IResult<Include> {
             include_dts_keyword,
             cut(delimited(double_quote, include_path_str, double_quote)),
         ),
-        |path: Input| Include::Dts(str::from_utf8(path.fragment()).unwrap()),
+        |path: Input| Include::Dts(String::from_utf8(path.fragment().to_vec()).unwrap()),
     )(input)
 }
 
@@ -747,13 +747,13 @@ mod tests {
     fn parse_line_comments() {
         let (_, res) =
             all_consuming(line_comment)((&b"// This is a comment\n"[..]).into()).unwrap();
-        assert_eq!(res.fragment(), b"// This is a comment\n");
+        assert_eq!(res.fragment().to_vec(), b"// This is a comment\n");
 
         let (rest, res) =
             line_comment((&b"// Multiline comments\nare not supported"[..]).into()).unwrap();
 
-        assert_eq!(res.fragment(), b"// Multiline comments\n");
-        assert_eq!(rest.fragment(), b"are not supported");
+        assert_eq!(res.fragment().to_vec(), b"// Multiline comments\n");
+        assert_eq!(rest.fragment().to_vec(), b"are not supported");
 
         assert!(
             line_comment((&br#"prop-name = "value"; // This is a comment"#[..]).into()).is_err()
@@ -763,13 +763,22 @@ mod tests {
     #[test]
     fn parse_node_names() {
         for (input, exp) in [
-            ("cpus", NodeId::Name("cpus", None)),
-            ("cpu@0", NodeId::Name("cpu", Some("0"))),
-            ("l2-cache", NodeId::Name("l2-cache", None)),
-            ("open-pic", NodeId::Name("open-pic", None)),
-            ("soc_gpio1", NodeId::Name("soc_gpio1", None)),
-            ("memory@0", NodeId::Name("memory", Some("0"))),
-            ("uart@fe001000", NodeId::Name("uart", Some("fe001000"))),
+            ("cpus", NodeId::Name("cpus".to_string(), None)),
+            (
+                "cpu@0",
+                NodeId::Name("cpu".to_string(), Some("0".to_string())),
+            ),
+            ("l2-cache", NodeId::Name("l2-cache".to_string(), None)),
+            ("open-pic", NodeId::Name("open-pic".to_string(), None)),
+            ("soc_gpio1", NodeId::Name("soc_gpio1".to_string(), None)),
+            (
+                "memory@0",
+                NodeId::Name("memory".to_string(), Some("0".to_string())),
+            ),
+            (
+                "uart@fe001000",
+                NodeId::Name("uart".to_string(), Some("fe001000".to_string())),
+            ),
         ] {
             assert_eq!(
                 exp,
@@ -826,63 +835,65 @@ mod tests {
             (
                 r#"device_type = "cpu";"#,
                 Property {
-                    name: "device_type",
-                    value: Some(vec![Str("cpu")]),
+                    name: "device_type".to_string(),
+                    value: Some(vec![Str("cpu".to_string())]),
                 },
             ),
             (
                 r#"compatible = "ns16550", "ns8250";"#,
                 Property {
-                    name: "compatible",
-                    value: Some(vec![Str("ns16550"), Str("ns8250")]),
+                    name: "compatible".to_string(),
+                    value: Some(vec![Str("ns16550".to_string()), Str("ns8250".to_string())]),
                 },
             ),
             (
                 r#"example = <&mpic 0xf00f0000 19>, "a strange property format";"#,
                 Property {
-                    name: "example",
+                    name: "example".to_string(),
                     value: Some(vec![
                         CellArray(vec![
-                            PropertyCell::Ref(Reference("mpic")),
+                            PropertyCell::Ref(Reference("mpic".to_string())),
                             Expr(Lit(Num(0xf00f_0000))),
                             Expr(Lit(Num(19))),
                         ]),
-                        Str("a strange property format"),
+                        Str("a strange property format".to_string()),
                     ]),
                 },
             ),
             (
                 r#"reg = <0>;"#,
                 Property {
-                    name: "reg",
+                    name: "reg".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                 },
             ),
             (
                 r#"cache-unified;"#,
                 Property {
-                    name: "cache-unified",
+                    name: "cache-unified".to_string(),
                     value: None,
                 },
             ),
             (
                 r#"cache-size = <0x8000>;"#,
                 Property {
-                    name: "cache-size",
+                    name: "cache-size".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0x8000)))])]),
                 },
             ),
             (
                 r#"next-level-cache = <&L2_0>;"#,
                 Property {
-                    name: "next-level-cache",
-                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference("L2_0"))])]),
+                    name: "next-level-cache".to_string(),
+                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference(
+                        "L2_0".to_string(),
+                    ))])]),
                 },
             ),
             (
                 r#"interrupts = <17 0xc 'A'>;"#,
                 Property {
-                    name: "interrupts",
+                    name: "interrupts".to_string(),
                     value: Some(vec![CellArray(vec![
                         Expr(Lit(Num(17))),
                         Expr(Lit(Num(0xc))),
@@ -893,23 +904,23 @@ mod tests {
             (
                 r#"serial0 = &usart3;"#,
                 Property {
-                    name: "serial0",
-                    value: Some(vec![PropertyValue::Ref(Reference("usart3"))]),
+                    name: "serial0".to_string(),
+                    value: Some(vec![PropertyValue::Ref(Reference("usart3".to_string()))]),
                 },
             ),
             (
                 r#"cpu = <&{/cpus/cpu@0}>;"#,
                 Property {
-                    name: "cpu",
+                    name: "cpu".to_string(),
                     value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference(
-                        "/cpus/cpu@0",
+                        "/cpus/cpu@0".to_string(),
                     ))])]),
                 },
             ),
             (
                 r#"pinctrl-0 = <>;"#,
                 Property {
-                    name: "pinctrl-0",
+                    name: "pinctrl-0".to_string(),
                     value: Some(vec![PropertyValue::CellArray(vec![])]),
                 },
             ),
@@ -931,14 +942,14 @@ mod tests {
         let input = r#"/ { #address-cells = <2>; #size-cells = <1>; };"#;
 
         let exp = Node {
-            id: NodeId::Name("/", None),
+            id: NodeId::Name("/".to_string(), None),
             contents: vec![
                 NodeItem::Property(Property {
-                    name: "#address-cells",
+                    name: "#address-cells".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(2)))])]),
                 }),
                 NodeItem::Property(Property {
-                    name: "#size-cells",
+                    name: "#size-cells".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                 }),
             ],
@@ -988,63 +999,65 @@ mod tests {
         "#;
 
         let l2_0 = Node {
-            id: NodeId::Name("l2-cache", None),
-            labels: vec!["L2_0"],
+            id: NodeId::Name("l2-cache".to_string(), None),
+            labels: vec!["L2_0".to_string()],
             contents: vec![Property {
-                name: "compatible",
-                value: Some(vec![Str("cache")]),
+                name: "compatible".to_string(),
+                value: Some(vec![Str("cache".to_string())]),
             }
             .into()],
             ..Default::default()
         };
 
         let l2_1 = Node {
-            id: NodeId::Name("l2-cache", None),
-            labels: vec!["L2", "L2_1"],
+            id: NodeId::Name("l2-cache".to_string(), None),
+            labels: vec!["L2".to_string(), "L2_1".to_string()],
             contents: vec![Property {
-                name: "compatible",
-                value: Some(vec![Str("cache")]),
+                name: "compatible".to_string(),
+                value: Some(vec![Str("cache".to_string())]),
             }
             .into()],
             ..Default::default()
         };
 
         let cpu_0 = Node {
-            id: NodeId::Name("cpu", Some("0")),
+            id: NodeId::Name("cpu".to_string(), Some("0".to_string())),
             contents: vec![
                 Property {
-                    name: "device_type",
-                    value: Some(vec![Str("cpu")]),
+                    name: "device_type".to_string(),
+                    value: Some(vec![Str("cpu".to_string())]),
                 }
                 .into(),
                 Property {
-                    name: "reg",
+                    name: "reg".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                 }
                 .into(),
                 Property {
-                    name: "cache-unified",
+                    name: "cache-unified".to_string(),
                     value: None,
                 }
                 .into(),
                 Property {
-                    name: "cache-size",
+                    name: "cache-size".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0x8000)))])]),
                 }
                 .into(),
                 Property {
-                    name: "cache-block-size",
+                    name: "cache-block-size".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(32)))])]),
                 }
                 .into(),
                 Property {
-                    name: "timebase-frequency",
+                    name: "timebase-frequency".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(82_500_000)))])]),
                 }
                 .into(),
                 Property {
-                    name: "next-level-cache",
-                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference("L2_0"))])]),
+                    name: "next-level-cache".to_string(),
+                    value: Some(vec![CellArray(vec![PropertyCell::Ref(Reference(
+                        "L2_0".to_string(),
+                    ))])]),
                 }
                 .into(),
                 l2_0.into(),
@@ -1053,15 +1066,15 @@ mod tests {
         };
 
         let cpu_1 = Node {
-            id: NodeId::Name("cpu", Some("1")),
+            id: NodeId::Name("cpu".to_string(), Some("1".to_string())),
             contents: vec![
                 Property {
-                    name: "device_type",
-                    value: Some(vec![Str("cpu")]),
+                    name: "device_type".to_string(),
+                    value: Some(vec![Str("cpu".to_string())]),
                 }
                 .into(),
                 Property {
-                    name: "reg",
+                    name: "reg".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                 }
                 .into(),
@@ -1071,15 +1084,15 @@ mod tests {
         };
 
         let exp = Node {
-            id: NodeId::Name("cpus", None),
+            id: NodeId::Name("cpus".to_string(), None),
             contents: vec![
                 Property {
-                    name: "#address-cells",
+                    name: "#address-cells".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(1)))])]),
                 }
                 .into(),
                 Property {
-                    name: "#size-cells",
+                    name: "#size-cells".to_string(),
                     value: Some(vec![CellArray(vec![Expr(Lit(Num(0)))])]),
                 }
                 .into(),
@@ -1100,20 +1113,29 @@ mod tests {
     #[test]
     fn parse_includes() {
         for (input, exp) in [
-            (r#"/include/ "sama5.dtsi""#, Include::Dts("sama5.dtsi")),
+            (
+                r#"/include/ "sama5.dtsi""#,
+                Include::Dts("sama5.dtsi".to_string()),
+            ),
             (
                 r#"/include/ "inner/sample.dtsi""#,
-                Include::Dts("inner/sample.dtsi"),
+                Include::Dts("inner/sample.dtsi".to_string()),
             ),
-            (r#"#include "sama5.dtsi""#, Include::C("sama5.dtsi")),
+            (
+                r#"#include "sama5.dtsi""#,
+                Include::C("sama5.dtsi".to_string()),
+            ),
             (
                 r#"#include "inner/sample.dtsi""#,
-                Include::C("inner/sample.dtsi"),
+                Include::C("inner/sample.dtsi".to_string()),
             ),
-            (r#"#include <sama5.dtsi>"#, Include::C("sama5.dtsi")),
+            (
+                r#"#include <sama5.dtsi>"#,
+                Include::C("sama5.dtsi".to_string()),
+            ),
             (
                 r#"#include <inner/sample.dtsi>"#,
-                Include::C("inner/sample.dtsi"),
+                Include::C("inner/sample.dtsi".to_string()),
             ),
         ] {
             assert_eq!(
@@ -1148,12 +1170,18 @@ mod tests {
     #[test]
     fn parse_deleted_node_directives() {
         for (input, exp) in [
-            ("/delete-node/ foo;", Some(NodeId::Name("foo", None))),
+            (
+                "/delete-node/ foo;",
+                Some(NodeId::Name("foo".to_string(), None)),
+            ),
             (
                 "/delete-node/ bar@0,0;",
-                Some(NodeId::Name("bar", Some("0,0"))),
+                Some(NodeId::Name("bar".to_string(), Some("0,0".to_string()))),
             ),
-            ("/delete-node/ &baz;", Some(NodeId::Ref(Reference("baz")))),
+            (
+                "/delete-node/ &baz;",
+                Some(NodeId::Ref(Reference("baz".to_string()))),
+            ),
         ] {
             match deleted_node(input.as_bytes().into()) {
                 Ok((rest, res)) => {
@@ -1189,14 +1217,17 @@ mod tests {
     #[test]
     fn parse_omit_if_no_ref_directives() {
         for (input, exp) in [
-            ("/omit-if-no-ref/ foo;", Some(NodeId::Name("foo", None))),
+            (
+                "/omit-if-no-ref/ foo;",
+                Some(NodeId::Name("foo".to_string(), None)),
+            ),
             (
                 "/omit-if-no-ref/ bar@0,0;",
-                Some(NodeId::Name("bar", Some("0,0"))),
+                Some(NodeId::Name("bar".to_string(), Some("0,0".to_string()))),
             ),
             (
                 "/omit-if-no-ref/ &baz;",
-                Some(NodeId::Ref(Reference("baz"))),
+                Some(NodeId::Ref(Reference("baz".to_string()))),
             ),
         ] {
             match omit_if_no_ref(input.as_bytes().into()) {
@@ -1217,7 +1248,7 @@ mod tests {
             RootItem::Version(DtsVersion::V1),
             RootItem::Version(DtsVersion::V1),
             RootItem::Node(Node {
-                id: NodeId::Name("/", None),
+                id: NodeId::Name("/".to_string(), None),
                 ..Default::default()
             }),
         ]);

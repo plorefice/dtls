@@ -1,20 +1,20 @@
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Root<'s>(pub(crate) Vec<RootItem<'s>>);
+pub struct Root(pub(crate) Vec<RootItem>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RootItem<'s> {
-    Include(Include<'s>),
+pub enum RootItem {
+    Include(Include),
     Version(DtsVersion),
-    Node(Node<'s>),
-    OmitNode(NodeId<'s>),
-    DeleteNode(NodeId<'s>),
+    Node(Node),
+    OmitNode(NodeId),
+    DeleteNode(NodeId),
     MemReserve((u64, u64)),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Include<'s> {
-    C(&'s str),
-    Dts(&'s str),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Include {
+    C(String),
+    Dts(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,17 +24,17 @@ pub enum DtsVersion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Node<'s> {
-    pub id: NodeId<'s>,
-    pub labels: Vec<&'s str>,
-    pub contents: Vec<NodeItem<'s>>,
+pub struct Node {
+    pub id: NodeId,
+    pub labels: Vec<String>,
+    pub contents: Vec<NodeItem>,
     pub ommittable: bool,
 }
 
-impl<'s> Default for Node<'s> {
+impl Default for Node {
     fn default() -> Self {
         Self {
-            id: NodeId::Name("", None),
+            id: NodeId::Name(Default::default(), None),
             labels: Default::default(),
             contents: Default::default(),
             ommittable: Default::default(),
@@ -43,59 +43,59 @@ impl<'s> Default for Node<'s> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeId<'s> {
-    Ref(Reference<'s>),
-    Name(&'s str, Option<&'s str>),
+pub enum NodeId {
+    Ref(Reference),
+    Name(String, Option<String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reference<'s>(pub &'s str);
+pub struct Reference(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeItem<'s> {
-    Include(Include<'s>),
-    Property(Property<'s>),
-    ChildNode(Node<'s>),
-    DeletedProp(&'s str),
-    DeletedNode(NodeId<'s>),
+pub enum NodeItem {
+    Include(Include),
+    Property(Property),
+    ChildNode(Node),
+    DeletedProp(String),
+    DeletedNode(NodeId),
 }
 
-impl<'s> From<Include<'s>> for NodeItem<'s> {
-    fn from(i: Include<'s>) -> Self {
+impl From<Include> for NodeItem {
+    fn from(i: Include) -> Self {
         Self::Include(i)
     }
 }
 
-impl<'s> From<Property<'s>> for NodeItem<'s> {
-    fn from(p: Property<'s>) -> Self {
+impl From<Property> for NodeItem {
+    fn from(p: Property) -> Self {
         Self::Property(p)
     }
 }
 
-impl<'s> From<Node<'s>> for NodeItem<'s> {
-    fn from(n: Node<'s>) -> Self {
+impl From<Node> for NodeItem {
+    fn from(n: Node) -> Self {
         Self::ChildNode(n)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Property<'s> {
-    pub name: &'s str,
-    pub value: Option<Vec<PropertyValue<'s>>>,
+pub struct Property {
+    pub name: String,
+    pub value: Option<Vec<PropertyValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PropertyValue<'s> {
-    Str(&'s str),
-    Ref(Reference<'s>),
+pub enum PropertyValue {
+    Str(String),
+    Ref(Reference),
     Bytestring(Vec<u8>),
-    CellArray(Vec<PropertyCell<'s>>),
+    CellArray(Vec<PropertyCell>),
     Bits(u32, Vec<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PropertyCell<'s> {
-    Ref(Reference<'s>),
+pub enum PropertyCell {
+    Ref(Reference),
     Expr(Expression),
 }
 
