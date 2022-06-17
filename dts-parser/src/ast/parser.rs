@@ -15,18 +15,20 @@ use nom::{
 use nom_locate::LocatedSpan;
 
 use crate::ast::{
-    errors::{expect, Error},
+    parser::errors::{expect, Error},
     *,
 };
 
-pub(super) type Input<'a> = Span<'a>;
+mod errors;
 
-pub(super) type Span<'a> = LocatedSpan<&'a [u8], State<'a>>;
+type Input<'a> = Span<'a>;
 
-pub(super) type IResult<'a, T> = nom::IResult<Input<'a>, T>;
+type Span<'a> = LocatedSpan<&'a [u8], State<'a>>;
+
+type IResult<'a, T> = nom::IResult<Input<'a>, T>;
 
 #[derive(Clone, Debug)]
-pub(super) struct State<'a>(&'a RefCell<Vec<Error>>);
+struct State<'a>(&'a RefCell<Vec<Error>>);
 
 impl<'a> State<'a> {
     pub fn report_error(&self, error: Error) {
@@ -34,7 +36,7 @@ impl<'a> State<'a> {
     }
 }
 
-pub(super) trait ToRange {
+trait ToRange {
     fn to_range(&self) -> Range<usize>;
 }
 
