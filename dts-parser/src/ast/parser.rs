@@ -82,9 +82,10 @@ fn root(input: Input) -> IResult<Root> {
 
 /// Parse a version directive.
 fn version_directive(input: Input) -> IResult<DtsVersion> {
-    map(terminated(dts_v1_keyword, cut(terminator)), |_| {
-        DtsVersion::V1
-    })(input)
+    map(
+        terminated(dts_v1_keyword, expect(terminator, "missing ';'")),
+        |_| DtsVersion::V1,
+    )(input)
 }
 
 /// Parse a valid root node.
@@ -92,7 +93,7 @@ fn version_directive(input: Input) -> IResult<DtsVersion> {
 /// The root node is a top-level named node in the file and its name should always be '/'.
 fn root_node(input: Input) -> IResult<Node> {
     map(
-        tuple((root_node_name, node_body, cut(terminator))),
+        tuple((root_node_name, node_body, expect(terminator, "missing ';'"))),
         |(name, contents, _)| Node {
             id: NodeId::Name(String::from_utf8(name.fragment().to_vec()).unwrap(), None),
             contents,
@@ -112,7 +113,7 @@ fn node_override(input: Input) -> IResult<Node> {
             node_labels,
             node_reference,
             node_body,
-            cut(terminator),
+            expect(terminator, "missing ';'"),
         )),
         |(omit, labels, reference, contents, _)| Node {
             id: NodeId::Ref(reference),
@@ -136,7 +137,7 @@ fn inner_node(input: Input) -> IResult<Node> {
             node_labels,
             node_name,
             node_body,
-            cut(terminator),
+            expect(terminator, "missing ';'"),
         )),
         |(omit, labels, name, contents, _)| Node {
             id: name,
@@ -194,21 +195,38 @@ fn node_contents(input: Input) -> IResult<Vec<NodeItem>> {
 
 /// Parse a node property.
 fn property(input: Input) -> IResult<Option<Property>> {
-    let property = tuple((
-        prop_name,
-        opt(preceded(
-            expect(assignment, "missing '='"),
-            expect(prop_values, "expected property value"),
-        )),
-        expect(terminator, "missing ';'"),
-    ));
+    let (input, name) = map(prop_name, |name| {
+        String::from_utf8(name.fragment().to_vec()).unwrap()
+    })(input)?;
 
-    map(property, |(name, value, _)| {
-        value.map(|value| Property {
-            name: String::from_utf8(name.fragment().to_vec()).unwrap(),
-            value,
-        })
-    })(input)
+    let (input, term_err) = match terminator(input) {
+        Ok((input, _)) => {
+            return Ok((input, Some(Property { name, value: None })));
+        }
+        Err(nom::Err::Error(nom::error::Error { input, .. }))
+        | Err(nom::Err::Failure(nom::error::Error { input, .. })) => {
+            let range = input.to_range();
+            (input, Error(range, "missing ';'".to_string()))
+        }
+        Err(e) => return Err(e),
+    };
+
+    let (input, (assignment, values, _)) = tuple((
+        expect(assignment, "missing '='"),
+        expect(prop_values, "expected property value"),
+        expect(terminator, "missing ';'"),
+    ))(input)?;
+
+    match (assignment, values) {
+        (None, None) => {
+            input.extra.report_error(term_err);
+            Ok((input, None))
+        }
+        (None, value @ Some(_)) | (Some(_), value @ Some(_)) => {
+            Ok((input, Some(Property { name, value })))
+        }
+        (Some(_), None) => Ok((input, Some(Property { name, value: None }))),
+    }
 }
 
 /// Parse a propery name.
@@ -296,13 +314,17 @@ fn deleted_node(input: Input) -> IResult<NodeId> {
     delimited(
         delete_node_keyword,
         cut(alt((node_name, map(node_reference, NodeId::Ref)))),
-        cut(terminator),
+        expect(terminator, "missing ';'"),
     )(input)
 }
 
 /// Parse a deleted property.
 fn deleted_property(input: Input) -> IResult<Input> {
-    delimited(delete_property_keyword, cut(prop_name), cut(terminator))(input)
+    delimited(
+        delete_property_keyword,
+        cut(prop_name),
+        expect(terminator, "missing ';'"),
+    )(input)
 }
 
 /// Parse a valid memreserve directive.
@@ -310,7 +332,7 @@ fn memreserve(input: Input) -> IResult<(u64, u64)> {
     delimited(
         memreserve_keyword,
         cut(pair(unsigned_literal, unsigned_literal)),
-        cut(terminator),
+        expect(terminator, "missing ';'"),
     )(input)
 }
 
@@ -319,7 +341,7 @@ fn omit_if_no_ref(input: Input) -> IResult<NodeId> {
     delimited(
         omit_if_no_ref_keyword,
         cut(alt((node_name, map(node_reference, NodeId::Ref)))),
-        cut(terminator),
+        expect(terminator, "missing ';'"),
     )(input)
 }
 
@@ -378,13 +400,16 @@ fn expression_lit(input: Input) -> IResult<Expression> {
 ///
 /// Parenthesized expressions may contain a single term or an inner parenthesized expression.
 fn expression_parens(input: Input) -> IResult<Expression> {
-    preceded(
+    let expr = delimited(
         left_paren,
-        cut(terminated(
+        expect(
             alt((expression_term, expression_parens)),
-            right_paren,
-        )),
-    )(input)
+            "expected expression",
+        ),
+        expect(right_paren, "missing ';'"),
+    );
+
+    map(expr, |inner| inner.unwrap_or(Expression::Err))(input)
 }
 
 /// Parse a valid integer expression term in a property cell.

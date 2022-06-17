@@ -114,6 +114,7 @@ pub enum Expression {
         left: Box<Expression>,
         right: Box<Expression>,
     },
+    Err,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

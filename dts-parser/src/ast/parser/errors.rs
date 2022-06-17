@@ -5,15 +5,14 @@ use nom::{error, Err};
 use crate::ast::parser::{IResult, Input, ToRange};
 
 #[derive(Debug)]
-pub struct Error(Range<usize>, String);
+pub struct Error(pub(super) Range<usize>, pub(super) String);
 
-pub(super) fn expect<'a, O, F, E>(
-    parser: F,
-    error_msg: E,
-) -> impl Fn(Input<'a>) -> IResult<Option<O>>
+pub(super) fn expect<'a, F, O>(
+    mut parser: F,
+    error_msg: &'a str,
+) -> impl FnMut(Input<'a>) -> IResult<Option<O>>
 where
-    F: Fn(Input<'a>) -> IResult<O>,
-    E: ToString,
+    F: FnMut(Input<'a>) -> IResult<O>,
 {
     move |input| match parser(input) {
         Ok((remaining, output)) => Ok((remaining, Some(output))),
