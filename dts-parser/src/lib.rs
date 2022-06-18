@@ -277,6 +277,7 @@ fn property() -> impl Parser<u8, Property, Error = Simple<u8>> {
         .padded();
 
     let value = (cell_array().map(PropertyValue::CellArray))
+        .or(byte_string().map(PropertyValue::Bytestring))
         .or(phandle().map(PropertyValue::Phandle))
         .or(string().map(PropertyValue::Str));
 
@@ -300,6 +301,20 @@ fn cell_array() -> impl Parser<u8, Vec<PropertyCell>, Error = Simple<u8>> {
         .padded()
         .repeated()
         .delimited_by(just(b'<'), just(b'>'))
+        .collect()
+}
+
+fn byte_string() -> impl Parser<u8, Vec<u8>, Error = Simple<u8>> {
+    let byte = filter(|c: &u8| c.is_ascii_hexdigit())
+        .repeated()
+        .exactly(2)
+        .map(|s| u8::from_str_radix(str::from_utf8(&s).unwrap(), 16))
+        .unwrapped()
+        .padded();
+
+    byte.repeated()
+        .delimited_by(just(b'['), just(b']'))
+        .padded()
         .collect()
 }
 
@@ -769,6 +784,20 @@ mod tests {
                 Property {
                     name: "serial0".into(),
                     values: Some(vec![PropertyValue::Phandle(Label("usart3".into()))]),
+                },
+            ),
+            (
+                r#"local-mac-address = [ 00 11 22 33 44 55 ];"#,
+                Property {
+                    name: "local-mac-address".into(),
+                    values: Some(vec![Bytestring(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])]),
+                },
+            ),
+            (
+                r#"local-mac-address = [001122334455];"#,
+                Property {
+                    name: "local-mac-address".into(),
+                    values: Some(vec![Bytestring(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])]),
                 },
             ),
         ] {
