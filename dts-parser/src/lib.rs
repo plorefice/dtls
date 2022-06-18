@@ -29,8 +29,45 @@ pub struct Node {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeId {
-    Phandle(String),
-    Name(String, Option<String>),
+    Name(NodeName),
+    Phandle(Phandle),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeName {
+    pub name: String,
+    pub address: Option<String>,
+}
+
+impl<U, V> From<(U, Option<V>)> for NodeName
+where
+    U: ToString,
+    V: ToString,
+{
+    fn from((name, address): (U, Option<V>)) -> Self {
+        Self {
+            name: name.to_string(),
+            address: address.map(|v| v.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Phandle {
+    Label(String),
+    Path(Vec<NodeName>),
+}
+
+impl From<String> for Phandle {
+    fn from(s: String) -> Self {
+        Self::Label(s)
+    }
+}
+
+impl From<Vec<NodeName>> for Phandle {
+    fn from(v: Vec<NodeName>) -> Self {
+        Self::Path(v)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +79,7 @@ pub struct Property {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropertyValue {
     Str(String),
-    Phandle(String),
+    Phandle(Phandle),
     Bytestring(Vec<u8>),
     CellArray(Vec<PropertyCell>),
     Bits(u64, Vec<Expression>),
@@ -50,8 +87,20 @@ pub enum PropertyValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropertyCell {
-    Phandle(String),
+    Phandle(Phandle),
     Expr(Expression),
+}
+
+impl From<Phandle> for PropertyCell {
+    fn from(p: Phandle) -> Self {
+        Self::Phandle(p)
+    }
+}
+
+impl From<Expression> for PropertyCell {
+    fn from(e: Expression) -> Self {
+        Self::Expr(e)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,52 +258,63 @@ pub enum Version {
     V1,
 }
 
-pub fn from_str(s: &str) -> Expression {
+pub fn from_str(s: &str) -> Statement {
     parser().parse(s.as_bytes()).unwrap()
 }
 
-macro_rules! bin_op {
-    ($p:expr, $op:expr) => {
-        $p.clone()
-            .then($op.padded().then($p).repeated())
-            .foldl(|lhs, (op, rhs)| Expression::Binary(Box::new(lhs), op, Box::new(rhs)))
-            .boxed()
-    };
+fn parser() -> impl Parser<u8, Statement, Error = Simple<u8>> {
+    property()
+        .then_ignore(semicolon())
+        .map(Statement::Property)
+        .then_ignore(end())
 }
 
-fn parser() -> impl Parser<u8, Expression, Error = Simple<u8>> {
-    // An expression used in a property value
-    let expr = recursive(|expr| {
-        // Unsigned number in hexadecimal notation
-        let hex = just(b"0x")
-            .or(just(b"0X"))
-            .then(text::int(16))
-            .map(|(_, vs): (_, Vec<u8>)| {
-                i64::from_str_radix(str::from_utf8(&vs).unwrap(), 16).unwrap()
-            });
+fn property() -> impl Parser<u8, Property, Error = Simple<u8>> {
+    let name = filter(|c: &u8| c.is_ascii_alphanumeric() || b",._+?#-".contains(c))
+        .repeated()
+        .at_least(1)
+        .at_most(31)
+        .padded();
 
-        // Unsigned number in decimal notation
-        let dec =
-            text::int(10).map(|vs: Vec<u8>| str::from_utf8(&vs).unwrap().parse::<i64>().unwrap());
+    let value = cell_array().map(PropertyValue::CellArray).padded();
 
-        // Unsigned integer literal
-        let int = hex.or(dec).map(IntLiteral::Num).padded();
+    name.then_ignore(just(b'='))
+        .then(value.repeated())
+        .map(|(name, value)| Property {
+            name: String::from_utf8(name).unwrap(),
+            value: Some(value),
+        })
+}
 
-        // Character literal
-        let char_ = filter(u8::is_ascii_graphic)
-            .delimited_by(just(b'\''), just(b'\''))
-            .map(|c| IntLiteral::Char(c as char))
-            .padded();
+fn cell_array() -> impl Parser<u8, Vec<PropertyCell>, Error = Simple<u8>> {
+    let expr = literal()
+        .or(expr().delimited_by(just(b'('), just(b')')))
+        .map(PropertyCell::Expr);
 
-        // Any literal valid in the context of an expression
-        let literal = int.or(char_);
+    let phandle = phandle().map(PropertyCell::Phandle);
 
-        // 'Atoms' are expressions that contain no ambiguity (highest precedence)
-        let atom = (literal.map(Expression::Lit))
+    (phandle.or(expr))
+        .padded()
+        .repeated()
+        .delimited_by(just(b'<'), just(b'>'))
+        .collect()
+}
+
+fn expr() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
+    macro_rules! bin_op {
+        ($p:expr, $op:expr) => {
+            $p.clone()
+                .then($op.padded().then($p).repeated())
+                .foldl(|lhs, (op, rhs)| Expression::Binary(Box::new(lhs), op, Box::new(rhs)))
+                .boxed()
+        };
+    }
+
+    recursive(|expr| {
+        let atom = literal()
             .or(expr.delimited_by(just(b'('), just(b')')))
             .padded();
 
-        // A unary expression, i.e. an atom prefixed by a unary operator
         let unary = (just(b'-').to(UnaryOp::Neg))
             .or(just(b'~').to(UnaryOp::BitNot))
             .or(just(b'!').to(UnaryOp::LogicalNot))
@@ -263,7 +323,6 @@ fn parser() -> impl Parser<u8, Expression, Error = Simple<u8>> {
             .then(atom)
             .foldr(|op, rhs| Expression::Unary(op, Box::new(rhs)));
 
-        // A binary expression, accounting for operator precedence
         let binary = {
             let product = bin_op!(
                 unary,
@@ -320,9 +379,69 @@ fn parser() -> impl Parser<u8, Expression, Error = Simple<u8>> {
                 },
                 None => cond,
             })
-    });
+    })
+}
 
-    expr.then_ignore(end())
+fn phandle() -> impl Parser<u8, Phandle, Error = Simple<u8>> + Clone {
+    let label = node_label().map(Phandle::Label);
+
+    let path = node_path()
+        .delimited_by(just(b'{'), just(b'}'))
+        .map(Phandle::Path);
+
+    just(b'&').ignore_then(path.or(label))
+}
+
+fn node_label() -> impl Parser<u8, String, Error = Simple<u8>> + Clone {
+    text::ident().map(|s| String::from_utf8(s).unwrap())
+}
+
+fn node_path() -> impl Parser<u8, Vec<NodeName>, Error = Simple<u8>> + Clone {
+    just(b'/').ignore_then(node_name().separated_by(just(b'/')))
+}
+
+fn node_name() -> impl Parser<u8, NodeName, Error = Simple<u8>> + Clone {
+    let ident = filter(|c: &u8| c.is_ascii_alphanumeric() || b",._+-".contains(c))
+        .repeated()
+        .at_least(1)
+        .at_most(31);
+
+    ident
+        .then(just(b'@').ignore_then(ident).or_not())
+        .map(|(name, addr)| NodeName {
+            name: String::from_utf8(name).unwrap(),
+            address: addr.map(|addr| String::from_utf8(addr).unwrap()),
+        })
+}
+
+fn literal() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
+    int().or(char_()).map(Expression::Lit)
+}
+
+fn int() -> impl Parser<u8, IntLiteral, Error = Simple<u8>> + Clone {
+    hex().or(dec()).map(IntLiteral::Num).padded()
+}
+
+fn char_() -> impl Parser<u8, IntLiteral, Error = Simple<u8>> + Clone {
+    filter(u8::is_ascii_graphic)
+        .delimited_by(just(b'\''), just(b'\''))
+        .map(|c| IntLiteral::Char(c as char))
+        .padded()
+}
+
+fn hex() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
+    just(b"0x")
+        .or(just(b"0X"))
+        .then(text::int(16))
+        .map(|(_, vs): (_, Vec<u8>)| i64::from_str_radix(str::from_utf8(&vs).unwrap(), 16).unwrap())
+}
+
+fn dec() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
+    text::int(10).map(|vs: Vec<u8>| str::from_utf8(&vs).unwrap().parse::<i64>().unwrap())
+}
+
+fn semicolon() -> impl Parser<u8, u8, Error = Simple<u8>> + Clone {
+    just(b';').padded()
 }
 
 #[cfg(test)]
@@ -341,7 +460,7 @@ mod tests {
         ] {
             assert_eq!(
                 Expression::Lit(expected.into()),
-                parser().parse(input.as_bytes()).unwrap()
+                expr().parse(dbg!(input.as_bytes())).unwrap()
             );
         }
     }
@@ -360,7 +479,17 @@ mod tests {
         ] {
             assert_eq!(
                 Unary(UnaryOp::Neg, expected.into()),
-                parser().parse(input.as_bytes()).unwrap()
+                expr().parse(dbg!(input.as_bytes())).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_chars() {
+        for c in "0618jaAfJzaiw)k+1'-_!?".chars() {
+            assert_eq!(
+                Expression::Lit(c.into()),
+                expr().parse(format!("'{}'", c).as_bytes()).unwrap()
             );
         }
     }
@@ -379,7 +508,7 @@ mod tests {
                 Unary(LogicalNot, Unary(LogicalNot, 0.into()).into()),
             ),
         ] {
-            let expr = parser().parse(input.as_bytes()).unwrap();
+            let expr = expr().parse(dbg!(input.as_bytes())).unwrap();
 
             assert_eq!(ast, expr);
             assert_eq!(res, expr.eval());
@@ -442,10 +571,150 @@ mod tests {
                 },
             ),
         ] {
-            let expr = parser().parse(input.as_bytes()).unwrap();
+            let expr = expr().parse(dbg!(input.as_bytes())).unwrap();
 
             assert_eq!(ast, expr);
             assert_eq!(res, expr.eval());
+        }
+    }
+
+    #[test]
+    fn parse_node_name() {
+        for (input, expected) in [
+            ("cpus", ("cpus", None::<&str>).into()),
+            ("cpu@0", ("cpu", Some("0")).into()),
+            ("l2-cache", ("l2-cache", None::<&str>).into()),
+            ("open-pic", ("open-pic", None::<&str>).into()),
+            ("soc_gpio1", ("soc_gpio1", None::<&str>).into()),
+            ("memory@0", ("memory", Some("0")).into()),
+            ("uart@fe001000", ("uart", Some("fe001000")).into()),
+        ] as [(_, NodeName); 7]
+        {
+            assert_eq!(expected, node_name().parse(dbg!(input.as_bytes())).unwrap());
+        }
+    }
+
+    #[test]
+    fn parse_phandles() {
+        for (input, expected) in [
+            ("&soc", "soc".to_string().into()),
+            ("&gpio0", "gpio0".to_string().into()),
+            ("&{/cpus}", vec![("cpus", None::<&str>).into()].into()),
+            (
+                "&{/cpus/cpu@0}",
+                vec![("cpus", None::<&str>).into(), ("cpu", Some("0")).into()].into(),
+            ),
+        ] as [(_, Phandle); 4]
+        {
+            assert_eq!(expected, phandle().parse(dbg!(input.as_bytes())).unwrap());
+        }
+    }
+
+    #[test]
+    fn parse_cell_array() {
+        use BinaryOp::*;
+        use Expression::*;
+        use Phandle::*;
+        use PropertyCell::Expr;
+
+        for (input, expected) in [
+            ("<1>", vec![Expr(Lit(1.into()))]),
+            ("<1 2>", vec![Expr(Lit(1.into())), Expr(Lit(2.into()))]),
+            (
+                "<1 (1 << 0)>",
+                vec![
+                    Expr(Lit(1.into())),
+                    Expr(Binary(1.into(), LShift, 0.into())),
+                ],
+            ),
+            ("<&gpio0>", vec![Label("gpio0".into()).into()]),
+            (
+                "<&gpio0 0 1>",
+                vec![
+                    Label("gpio0".into()).into(),
+                    Expr(Lit(0.into())),
+                    Expr(Lit(1.into())),
+                ],
+            ),
+            (
+                "<&{/cpus/cpu@0} (1 << 0)>",
+                vec![
+                    Path(vec![
+                        ("cpus", None::<&str>).into(),
+                        ("cpu", Some("0")).into(),
+                    ])
+                    .into(),
+                    Expr(Binary(1.into(), LShift, 0.into())),
+                ],
+            ),
+        ] {
+            assert_eq!(
+                expected,
+                cell_array().parse(dbg!(input).as_bytes()).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_property() {
+        use super::Phandle::*;
+        use Expression::*;
+        use PropertyCell::*;
+        use PropertyValue::*;
+
+        for (input, expected) in [
+            (
+                r#"reg = <0>;"#,
+                Property {
+                    name: "reg".into(),
+                    value: Some(vec![CellArray(vec![Expr(Lit(0.into()))])]),
+                },
+            ),
+            (
+                r#"cache-size = <0x8000>;"#,
+                Property {
+                    name: "cache-size".into(),
+                    value: Some(vec![CellArray(vec![Expr(Lit(0x8000.into()))])]),
+                },
+            ),
+            (
+                r#"next-level-cache = <&L2_0>;"#,
+                Property {
+                    name: "next-level-cache".into(),
+                    value: Some(vec![CellArray(vec![Label("L2_0".into()).into()])]),
+                },
+            ),
+            (
+                r#"interrupts = <17 0xc 'A'>;"#,
+                Property {
+                    name: "interrupts".into(),
+                    value: Some(vec![CellArray(vec![
+                        Expr(Lit(17.into())),
+                        Expr(Lit(0xc.into())),
+                        Expr(Lit('A'.into())),
+                    ])]),
+                },
+            ),
+            (
+                r#"cpu = <&{/cpus/cpu@0}>;"#,
+                Property {
+                    name: "cpu".into(),
+                    value: Some(vec![CellArray(vec![Path(vec![
+                        ("cpus", None::<&str>).into(),
+                        ("cpu", Some("0")).into(),
+                    ])
+                    .into()])]),
+                },
+            ),
+            (
+                r#"pinctrl-0 = <>;"#,
+                Property {
+                    name: "pinctrl-0".into(),
+                    value: Some(vec![PropertyValue::CellArray(vec![])]),
+                },
+            ),
+        ] {
+            assert_eq!(expected, property().parse(dbg!(input).as_bytes()).unwrap());
         }
     }
 }

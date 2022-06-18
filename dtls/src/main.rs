@@ -16,5 +16,5 @@ fn main() {
         buf
     };
 
-    println!("{}", dts_parser::from_str(&source).eval());
+    println!("{:?}", dts_parser::from_str(&source));
 }
