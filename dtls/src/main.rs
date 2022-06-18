@@ -2,14 +2,12 @@ use std::{
     env,
     fs::File,
     io::{self, BufReader, Read},
-    process,
 };
 
 fn main() {
-    let reader: Box<dyn Read> = if let Some(fname) = env::args().nth(1) {
-        Box::new(File::open(fname).unwrap())
-    } else {
-        Box::new(io::stdin())
+    let reader: Box<dyn Read> = match env::args().nth(1) {
+        Some(fname) => Box::new(File::open(fname).unwrap()),
+        None => Box::new(io::stdin()),
     };
 
     let source = {
@@ -18,14 +16,5 @@ fn main() {
         buf
     };
 
-    let (ast, errors) = dts_parser::from_str(source.as_str());
-
-    println!("{:?}", ast);
-
-    if !errors.is_empty() {
-        for error in errors {
-            eprintln!("ERROR: {:?}", error);
-        }
-        process::exit(1);
-    }
+    println!("{}", dts_parser::from_str(&source).eval());
 }
