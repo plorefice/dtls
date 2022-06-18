@@ -74,6 +74,7 @@ impl From<Vec<NodeName>> for Phandle {
 pub struct Property {
     pub name: String,
     pub values: Option<Vec<PropertyValue>>,
+    pub storage_modifier: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,7 +83,6 @@ pub enum PropertyValue {
     Phandle(Phandle),
     Bytestring(Vec<u8>),
     CellArray(Vec<PropertyCell>),
-    Bits(u64, Vec<Expression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,10 +283,19 @@ fn property() -> impl Parser<u8, Property, Error = Simple<u8>> {
 
     let values = value.padded().separated_by(just(b',').padded());
 
-    name.then((just(b'=').ignore_then(values)).or_not())
-        .map(|(name, values)| Property {
-            name: String::from_utf8(name).unwrap(),
-            values,
+    let bits = just(b"/bits/").padded().ignore_then(number());
+
+    name.then((just(b'=').ignore_then(bits.or_not().then(values))).or_not())
+        .map(|(name, rest)| {
+            let (storage_modifier, values) = rest
+                .map(|(bits, values)| (bits, Some(values)))
+                .unwrap_or((None, None));
+
+            Property {
+                name: String::from_utf8(name).unwrap(),
+                values,
+                storage_modifier,
+            }
         })
 }
 
@@ -446,18 +455,18 @@ fn string() -> impl Parser<u8, String, Error = Simple<u8>> + Clone {
 }
 
 fn literal() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
-    int().or(char_()).map(Expression::Lit)
-}
+    let int = number().map(IntLiteral::Num).padded();
 
-fn int() -> impl Parser<u8, IntLiteral, Error = Simple<u8>> + Clone {
-    hex().or(dec()).map(IntLiteral::Num).padded()
-}
-
-fn char_() -> impl Parser<u8, IntLiteral, Error = Simple<u8>> + Clone {
-    filter(u8::is_ascii_graphic)
+    let char_ = filter(u8::is_ascii_graphic)
         .delimited_by(just(b'\''), just(b'\''))
         .map(|c| IntLiteral::Char(c as char))
-        .padded()
+        .padded();
+
+    int.or(char_).map(Expression::Lit)
+}
+
+fn number() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
+    hex().or(dec())
 }
 
 fn hex() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
@@ -699,6 +708,7 @@ mod tests {
                 Property {
                     name: "cache-unified".into(),
                     values: None,
+                    storage_modifier: None,
                 },
             ),
             (
@@ -706,13 +716,15 @@ mod tests {
                 Property {
                     name: "reg".into(),
                     values: Some(vec![CellArray(vec![Expr(Lit(0.into()))])]),
+                    storage_modifier: None,
                 },
             ),
             (
-                r#"cache-size = <0x8000>;"#,
+                r#"cache-size = /bits/ 16 <0x8000>;"#,
                 Property {
                     name: "cache-size".into(),
                     values: Some(vec![CellArray(vec![Expr(Lit(0x8000.into()))])]),
+                    storage_modifier: Some(16),
                 },
             ),
             (
@@ -720,6 +732,7 @@ mod tests {
                 Property {
                     name: "next-level-cache".into(),
                     values: Some(vec![CellArray(vec![Label("L2_0".into()).into()])]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -731,6 +744,7 @@ mod tests {
                         Expr(Lit(0xc.into())),
                         Expr(Lit('A'.into())),
                     ])]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -742,6 +756,7 @@ mod tests {
                         ("cpu", Some("0")).into(),
                     ])
                     .into()])]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -749,6 +764,7 @@ mod tests {
                 Property {
                     name: "pinctrl-0".into(),
                     values: Some(vec![PropertyValue::CellArray(vec![])]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -756,6 +772,7 @@ mod tests {
                 Property {
                     name: "device_type".into(),
                     values: Some(vec![Str("cpu".into())]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -763,6 +780,7 @@ mod tests {
                 Property {
                     name: "compatible".into(),
                     values: Some(vec![Str("ns16550".into()), Str("ns8250".into())]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -777,6 +795,7 @@ mod tests {
                         ]),
                         Str("a strange property format".into()),
                     ]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -784,6 +803,7 @@ mod tests {
                 Property {
                     name: "serial0".into(),
                     values: Some(vec![PropertyValue::Phandle(Label("usart3".into()))]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -791,6 +811,7 @@ mod tests {
                 Property {
                     name: "local-mac-address".into(),
                     values: Some(vec![Bytestring(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])]),
+                    storage_modifier: None,
                 },
             ),
             (
@@ -798,6 +819,18 @@ mod tests {
                 Property {
                     name: "local-mac-address".into(),
                     values: Some(vec![Bytestring(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])]),
+                    storage_modifier: None,
+                },
+            ),
+            (
+                r#"prop = /bits/ 16 <0x1234 0x5678>, <0x9abc 0xdef0>;"#,
+                Property {
+                    name: "prop".into(),
+                    values: Some(vec![
+                        CellArray(vec![Expr(Lit(0x1234.into())), Expr(Lit(0x5678.into()))]),
+                        CellArray(vec![Expr(Lit(0x9abc.into())), Expr(Lit(0xdef0.into()))]),
+                    ]),
+                    storage_modifier: Some(16),
                 },
             ),
         ] {
