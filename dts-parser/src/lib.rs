@@ -276,15 +276,16 @@ fn property() -> impl Parser<u8, Property, Error = Simple<u8>> {
         .at_most(31)
         .padded();
 
-    let values = (cell_array().map(PropertyValue::CellArray))
+    let value = (cell_array().map(PropertyValue::CellArray))
         .or(phandle().map(PropertyValue::Phandle))
         .or(string().map(PropertyValue::Str));
 
-    name.then_ignore(just(b'='))
-        .then(values.padded().separated_by(just(b',').padded()))
+    let values = value.padded().separated_by(just(b',').padded());
+
+    name.then((just(b'=').ignore_then(values)).or_not())
         .map(|(name, values)| Property {
             name: String::from_utf8(name).unwrap(),
-            values: Some(values),
+            values,
         })
 }
 
@@ -678,6 +679,13 @@ mod tests {
         use PropertyValue::*;
 
         for (input, expected) in [
+            (
+                r#"cache-unified;"#,
+                Property {
+                    name: "cache-unified".into(),
+                    values: None,
+                },
+            ),
             (
                 r#"reg = <0>;"#,
                 Property {
