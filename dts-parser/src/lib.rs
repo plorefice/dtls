@@ -73,7 +73,7 @@ impl From<Vec<NodeName>> for Phandle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
     pub name: String,
-    pub value: Option<Vec<PropertyValue>>,
+    pub values: Option<Vec<PropertyValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,13 +276,15 @@ fn property() -> impl Parser<u8, Property, Error = Simple<u8>> {
         .at_most(31)
         .padded();
 
-    let value = cell_array().map(PropertyValue::CellArray).padded();
+    let values = (cell_array().map(PropertyValue::CellArray))
+        .or(phandle().map(PropertyValue::Phandle))
+        .or(string().map(PropertyValue::Str));
 
     name.then_ignore(just(b'='))
-        .then(value.repeated())
-        .map(|(name, value)| Property {
+        .then(values.padded().separated_by(just(b',').padded()))
+        .map(|(name, values)| Property {
             name: String::from_utf8(name).unwrap(),
-            value: Some(value),
+            values: Some(values),
         })
 }
 
@@ -412,6 +414,19 @@ fn node_name() -> impl Parser<u8, NodeName, Error = Simple<u8>> + Clone {
             name: String::from_utf8(name).unwrap(),
             address: addr.map(|addr| String::from_utf8(addr).unwrap()),
         })
+}
+
+fn string() -> impl Parser<u8, String, Error = Simple<u8>> + Clone {
+    let escape = just(b'\\').ignore_then(one_of(b"\\/\""));
+
+    just(b'"')
+        .ignore_then(
+            filter(|c: &u8| *c != b'\\' && *c != b'"')
+                .or(escape)
+                .repeated(),
+        )
+        .then_ignore(just(b'"'))
+        .map(|v| String::from_utf8(v).unwrap())
 }
 
 fn literal() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
@@ -667,28 +682,28 @@ mod tests {
                 r#"reg = <0>;"#,
                 Property {
                     name: "reg".into(),
-                    value: Some(vec![CellArray(vec![Expr(Lit(0.into()))])]),
+                    values: Some(vec![CellArray(vec![Expr(Lit(0.into()))])]),
                 },
             ),
             (
                 r#"cache-size = <0x8000>;"#,
                 Property {
                     name: "cache-size".into(),
-                    value: Some(vec![CellArray(vec![Expr(Lit(0x8000.into()))])]),
+                    values: Some(vec![CellArray(vec![Expr(Lit(0x8000.into()))])]),
                 },
             ),
             (
                 r#"next-level-cache = <&L2_0>;"#,
                 Property {
                     name: "next-level-cache".into(),
-                    value: Some(vec![CellArray(vec![Label("L2_0".into()).into()])]),
+                    values: Some(vec![CellArray(vec![Label("L2_0".into()).into()])]),
                 },
             ),
             (
                 r#"interrupts = <17 0xc 'A'>;"#,
                 Property {
                     name: "interrupts".into(),
-                    value: Some(vec![CellArray(vec![
+                    values: Some(vec![CellArray(vec![
                         Expr(Lit(17.into())),
                         Expr(Lit(0xc.into())),
                         Expr(Lit('A'.into())),
@@ -699,7 +714,7 @@ mod tests {
                 r#"cpu = <&{/cpus/cpu@0}>;"#,
                 Property {
                     name: "cpu".into(),
-                    value: Some(vec![CellArray(vec![Path(vec![
+                    values: Some(vec![CellArray(vec![Path(vec![
                         ("cpus", None::<&str>).into(),
                         ("cpu", Some("0")).into(),
                     ])
@@ -710,7 +725,42 @@ mod tests {
                 r#"pinctrl-0 = <>;"#,
                 Property {
                     name: "pinctrl-0".into(),
-                    value: Some(vec![PropertyValue::CellArray(vec![])]),
+                    values: Some(vec![PropertyValue::CellArray(vec![])]),
+                },
+            ),
+            (
+                r#"device_type = "cpu";"#,
+                Property {
+                    name: "device_type".into(),
+                    values: Some(vec![Str("cpu".into())]),
+                },
+            ),
+            (
+                r#"compatible = "ns16550", "ns8250";"#,
+                Property {
+                    name: "compatible".into(),
+                    values: Some(vec![Str("ns16550".into()), Str("ns8250".into())]),
+                },
+            ),
+            (
+                r#"example = <&mpic 0xf00f0000 19>, "a strange property format";"#,
+                Property {
+                    name: "example".into(),
+                    values: Some(vec![
+                        CellArray(vec![
+                            Label("mpic".into()).into(),
+                            Expr(Lit(0xf00f_0000.into())),
+                            Expr(Lit(19.into())),
+                        ]),
+                        Str("a strange property format".into()),
+                    ]),
+                },
+            ),
+            (
+                r#"serial0 = &usart3;"#,
+                Property {
+                    name: "serial0".into(),
+                    values: Some(vec![PropertyValue::Phandle(Label("usart3".into()))]),
                 },
             ),
         ] {
