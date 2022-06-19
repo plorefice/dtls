@@ -362,7 +362,7 @@ fn expr() -> impl Parser<char, Expression, Error = Simple<char>> + Clone {
             .or(just('!').to(UnaryOp::LogicalNot))
             .padded()
             .repeated()
-            .then(atom)
+            .then(atom.clone())
             .foldr(|op, rhs| Expression::Unary(op, Box::new(rhs)));
 
         let binary = {
@@ -405,22 +405,25 @@ fn expr() -> impl Parser<char, Expression, Error = Simple<char>> + Clone {
         };
 
         // A ternary expression (lowest precedence), or a simple expression if not ternary
-        (binary.clone())
-            .then(
-                just('?')
-                    .ignore_then(binary.clone())
-                    .then_ignore(just(':'))
-                    .then(binary)
-                    .or_not(),
-            )
-            .map(|(cond, rest)| match rest {
-                Some((then, else_)) => Expression::Ternary {
-                    cond: Box::new(cond),
-                    then: Box::new(then),
-                    else_: Box::new(else_),
-                },
-                None => cond,
-            })
+        recursive(|ternary| {
+            binary
+                .clone()
+                .then(
+                    just('?')
+                        .ignore_then(binary)
+                        .then_ignore(just(':'))
+                        .then(ternary)
+                        .or_not(),
+                )
+                .map(|(cond, rest)| match rest {
+                    Some((then, else_)) => Expression::Ternary {
+                        cond: Box::new(cond),
+                        then: Box::new(then),
+                        else_: Box::new(else_),
+                    },
+                    None => cond,
+                })
+        })
     })
 }
 
@@ -762,6 +765,51 @@ mod tests {
                     cond: Binary(Binary(2.into(), Add, 'A'.into()).into(), Neq, 0.into()).into(),
                     then: Binary(5.into(), LShift, 1.into()).into(),
                     else_: Unary(BitNot, 0.into()).into(),
+                },
+            ),
+            (
+                "((16 <= 2) ? (0x00b4 + 4 * 16) :
+                    (16 <= 26) ? (0x027c + 4 * (16 - 3)) :
+                        (16 <= 98) ? (0x0400 + 4 * (16 - 27)) :
+                            (16 <= 127) ? (0x0600 + 4 * (16 - 99)) : 0)",
+                688,
+                Ternary {
+                    cond: Binary(16.into(), Le, 2.into()).into(),
+                    then: Binary(0x00b4.into(), Add, Binary(4.into(), Mul, 16.into()).into())
+                        .into(),
+                    else_: Ternary {
+                        cond: Binary(16.into(), Le, 26.into()).into(),
+                        then: Binary(
+                            0x027c.into(),
+                            Add,
+                            Binary(4.into(), Mul, Binary(16.into(), Sub, 3.into()).into()).into(),
+                        )
+                        .into(),
+                        else_: Ternary {
+                            cond: Binary(16.into(), Le, 98.into()).into(),
+                            then: Binary(
+                                0x0400.into(),
+                                Add,
+                                Binary(4.into(), Mul, Binary(16.into(), Sub, 27.into()).into())
+                                    .into(),
+                            )
+                            .into(),
+                            else_: Ternary {
+                                cond: Binary(16.into(), Le, 127.into()).into(),
+                                then: Binary(
+                                    0x0600.into(),
+                                    Add,
+                                    Binary(4.into(), Mul, Binary(16.into(), Sub, 99.into()).into())
+                                        .into(),
+                                )
+                                .into(),
+                                else_: 0.into(),
+                            }
+                            .into(),
+                        }
+                        .into(),
+                    }
+                    .into(),
                 },
             ),
         ] {
