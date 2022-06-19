@@ -294,8 +294,7 @@ fn node(
 fn property() -> impl Parser<u8, Property, Error = Simple<u8>> + Clone {
     let name = filter(|c: &u8| c.is_ascii_alphanumeric() || b",._+?#-".contains(c))
         .repeated()
-        .at_least(1)
-        .at_most(31)
+        .at_least(1) // there should be a maximum of 31, but apparently it's not enforced
         .padded();
 
     let value = (cell_array().map(PropertyValue::CellArray))
@@ -452,8 +451,7 @@ fn node_path() -> impl Parser<u8, Vec<NodeName>, Error = Simple<u8>> + Clone {
 fn node_name() -> impl Parser<u8, NodeName, Error = Simple<u8>> + Clone {
     let ident = filter(|c: &u8| c.is_ascii_alphanumeric() || b",._+-".contains(c))
         .repeated()
-        .at_least(1)
-        .at_most(31);
+        .at_least(1); // there should be a maximum of 31, but apparently it's not enforced
 
     ident
         .then(just(b'@').ignore_then(ident).or_not())
@@ -876,6 +874,10 @@ mod tests {
                     ]
                 },
             ),
+            (
+                r#"a-very-very-veeeeeery-looooong-property-name-which-should-not-fail;"#,
+                prop! { "a-very-very-veeeeeery-looooong-property-name-which-should-not-fail" },
+            ),
         ] {
             assert_eq!(expected, property().parse(dbg!(input).as_bytes()).unwrap());
         }
@@ -884,7 +886,7 @@ mod tests {
     #[test]
     fn parse_node() {
         for (input, expected) in [(
-            r#"cpus {
+            r#"a-very-very-veeeeeery-looooong-node-name-which-should-not-fail {
                 #address-cells = <1>;
                 #size-cells = <0>;
 
@@ -912,7 +914,7 @@ mod tests {
                 };
             };"#,
             node! {
-                "cpus" => {
+                "a-very-very-veeeeeery-looooong-node-name-which-should-not-fail" => {
                     prop! {"#address-cells" => [ cells!(e!(1)) ] };
                     prop! {"#size-cells" => [ cells!(e!(0)) ] };
 
