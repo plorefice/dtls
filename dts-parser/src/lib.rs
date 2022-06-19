@@ -488,7 +488,18 @@ fn directive() -> impl Parser<char, Directive, Error = Simple<char>> + Clone {
         .then_ignore(semicolon())
         .map(Directive::DeleteNode);
 
-    version.or(include).or(delete_property).or(delete_node)
+    let memreserve = just("/memreserve/")
+        .padded()
+        .ignore_then(number().padded())
+        .then(number().padded())
+        .then_ignore(semicolon())
+        .map(|(a, b)| Directive::MemReserve(a as u64, b as u64));
+
+    version
+        .or(include)
+        .or(delete_property)
+        .or(delete_node)
+        .or(memreserve)
 }
 
 fn file_path() -> impl Parser<char, String, Error = Simple<char>> + Clone {
@@ -864,6 +875,10 @@ mod tests {
                     }
                     .into(),
                 ),
+            ),
+            (
+                "/memreserve/ 0x00000000 0x00400000;",
+                Directive::MemReserve(0, 0x400000),
             ),
         ] {
             assert_eq!(expected, directive().parse(dbg!(input)).unwrap());
