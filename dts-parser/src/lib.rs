@@ -267,15 +267,18 @@ fn node(
         .padded()
         .repeated();
 
-    labels
+    let omittable = just("/omit-if-no-ref/").padded().or_not();
+
+    omittable
+        .then(labels)
         .then(node_id())
         .then(stmts.delimited_by(just('{').padded(), just('}').padded()))
         .then_ignore(semicolon())
-        .map(|((labels, node_id), contents)| Node {
+        .map(|(((omit, labels), node_id), contents)| Node {
             id: node_id,
             labels,
             contents,
-            ommittable: false,
+            ommittable: omit.is_some(),
         })
 }
 
@@ -1082,6 +1085,18 @@ mod tests {
                             }
                         }
                     }
+                },
+            ),
+            (
+                r#"/omit-if-no-ref/ label: node@0 {};"#,
+                Node {
+                    id: NodeId::Name(NodeName {
+                        name: "node".into(),
+                        address: Some("0".into()),
+                    }),
+                    labels: vec!["label".into()],
+                    contents: vec![],
+                    ommittable: true,
                 },
             ),
         ] {
