@@ -498,10 +498,15 @@ fn number() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
 }
 
 fn hex() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
-    just(b"0x")
-        .or(just(b"0X"))
-        .then(text::int(16))
-        .map(|(_, vs): (_, Vec<u8>)| i64::from_str_radix(str::from_utf8(&vs).unwrap(), 16).unwrap())
+    (just(b"0x").or(just(b"0X")))
+        .ignore_then(
+            // text::int() won't parse hex numbers with leading zeros.
+            // In this case, we first try to apply the parser after consuming the leading zeros.
+            (just(b'0').repeated().chain(text::int(16)))
+                // If that fails, we fall back on a zero-only parser.
+                .or(just(b'0').repeated().at_least(1)),
+        )
+        .map(|vs: Vec<u8>| i64::from_str_radix(str::from_utf8(&vs).unwrap(), 16).unwrap())
 }
 
 fn dec() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
@@ -605,10 +610,14 @@ mod tests {
             ("0x1", 0x1),
             ("0x25", 0x25),
             ("0x1f", 0x1f),
+            ("0x0000", 0),
+            ("0x0001", 0x1),
+            ("0x0010", 0x10),
+            ("0x0f00", 0xf00),
         ] {
             assert_eq!(
                 Expression::Lit(expected.into()),
-                expr().parse(dbg!(input.as_bytes())).unwrap()
+                expr().parse(dbg!(input).as_bytes()).unwrap()
             );
         }
     }
@@ -627,7 +636,7 @@ mod tests {
         ] {
             assert_eq!(
                 Unary(UnaryOp::Neg, expected.into()),
-                expr().parse(dbg!(input.as_bytes())).unwrap()
+                expr().parse(dbg!(input).as_bytes()).unwrap()
             );
         }
     }
@@ -656,7 +665,7 @@ mod tests {
                 Unary(LogicalNot, Unary(LogicalNot, 0.into()).into()),
             ),
         ] {
-            let expr = expr().parse(dbg!(input.as_bytes())).unwrap();
+            let expr = expr().parse(dbg!(input).as_bytes()).unwrap();
 
             assert_eq!(ast, expr);
             assert_eq!(res, expr.eval());
@@ -719,7 +728,7 @@ mod tests {
                 },
             ),
         ] {
-            let expr = expr().parse(dbg!(input.as_bytes())).unwrap();
+            let expr = expr().parse(dbg!(input).as_bytes()).unwrap();
 
             assert_eq!(ast, expr);
             assert_eq!(res, expr.eval());
@@ -738,7 +747,7 @@ mod tests {
             ("uart@fe001000", ("uart", Some("fe001000")).into()),
         ] as [(_, NodeName); 7]
         {
-            assert_eq!(expected, node_name().parse(dbg!(input.as_bytes())).unwrap());
+            assert_eq!(expected, node_name().parse(dbg!(input).as_bytes()).unwrap());
         }
     }
 
@@ -754,7 +763,7 @@ mod tests {
             ),
         ] as [(_, Phandle); 4]
         {
-            assert_eq!(expected, phandle().parse(dbg!(input.as_bytes())).unwrap());
+            assert_eq!(expected, phandle().parse(dbg!(input).as_bytes()).unwrap());
         }
     }
 
@@ -808,6 +817,10 @@ mod tests {
         for (input, expected) in [
             (r#"cache-unified;"#, prop! { "cache-unified" }),
             (r#"reg = <0>;"#, prop! { "reg" => [ cells![e!(0)] ] }),
+            (
+                r#"reg = <0x002ff000 0x2000 0x0 0x01>;"#,
+                prop! { "reg" => [ cells![e!(0x002ff000), e!(0x2000), e!(0x0), e!(0x01)] ] },
+            ),
             (
                 r#"cache-size = /bits/ 16 <0x8000>;"#,
                 prop! { "cache-size", 16 => [ cells![e!(0x8000)] ] },
