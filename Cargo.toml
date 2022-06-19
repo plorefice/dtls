@@ -1,2 +1,2 @@
 [workspace]
-members = ["dtls", "dts-parser"]
+members = ["dtc", "dts-parser"]
