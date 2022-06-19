@@ -1,8 +1,9 @@
 use std::str;
 
 use chumsky::prelude::*;
+use derive_more::From;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum Statement {
     Node(Node),
     Property(Property),
@@ -27,7 +28,7 @@ pub struct Node {
     pub ommittable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum NodeId {
     Name(NodeName),
     Phandle(Phandle),
@@ -52,22 +53,10 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum Phandle {
     Label(String),
     Path(Vec<NodeName>),
-}
-
-impl From<String> for Phandle {
-    fn from(s: String) -> Self {
-        Self::Label(s)
-    }
-}
-
-impl From<Vec<NodeName>> for Phandle {
-    fn from(v: Vec<NodeName>) -> Self {
-        Self::Path(v)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +66,7 @@ pub struct Property {
     pub storage_modifier: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum PropertyValue {
     Str(String),
     Phandle(Phandle),
@@ -85,22 +74,16 @@ pub enum PropertyValue {
     CellArray(Vec<PropertyCell>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl From<&str> for PropertyValue {
+    fn from(s: &str) -> Self {
+        Self::from(s.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum PropertyCell {
     Phandle(Phandle),
     Expr(Expression),
-}
-
-impl From<Phandle> for PropertyCell {
-    fn from(p: Phandle) -> Self {
-        Self::Phandle(p)
-    }
-}
-
-impl From<Expression> for PropertyCell {
-    fn from(e: Expression) -> Self {
-        Self::Expr(e)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,15 +115,15 @@ impl Expression {
     }
 }
 
-impl From<i64> for Box<Expression> {
+impl From<i64> for Expression {
     fn from(i: i64) -> Self {
-        Expression::Lit(i.into()).into()
+        Expression::Lit(i.into())
     }
 }
 
-impl From<char> for Box<Expression> {
+impl From<char> for Expression {
     fn from(c: char) -> Self {
-        Expression::Lit(c.into()).into()
+        Expression::Lit(c.into())
     }
 }
 
@@ -258,15 +241,53 @@ pub enum Version {
     V1,
 }
 
-pub fn from_str(s: &str) -> Statement {
+pub fn from_str(s: &str) -> Vec<Statement> {
     parser().parse(s.as_bytes()).unwrap()
 }
 
-fn parser() -> impl Parser<u8, Statement, Error = Simple<u8>> {
-    property()
-        .then_ignore(semicolon())
-        .map(Statement::Property)
-        .then_ignore(end())
+fn parser() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> {
+    statements().then_ignore(end())
+}
+
+fn statements() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> {
+    recursive(|stmts| {
+        (node(stmts).map(Statement::Node))
+            .or(property().map(Statement::Property))
+            .then_ignore(semicolon())
+            .padded()
+            .repeated()
+    })
+}
+
+fn node(
+    stmts: impl Parser<u8, Vec<Statement>, Error = Simple<u8>>,
+) -> impl Parser<u8, Node, Error = Simple<u8>> {
+    let labels = node_label()
+        .then_ignore(just(b':').padded())
+        .padded()
+        .repeated();
+
+    let root_name = just(b'/')
+        .map(|_| NodeName {
+            name: "/".to_string(),
+            address: None,
+        })
+        .padded();
+
+    let node_id = (node_name().or(root_name).map(NodeId::Name))
+        .or(phandle().map(NodeId::Phandle))
+        .padded();
+
+    labels
+        .or_not()
+        .then(node_id)
+        .then(stmts.delimited_by(just(b'{').padded(), just(b'}').padded()))
+        .map(|((labels, node_id), contents)| Node {
+            id: node_id,
+            labels: labels.unwrap_or_default(),
+            contents,
+            ommittable: false,
+        })
 }
 
 fn property() -> impl Parser<u8, Property, Error = Simple<u8>> {
@@ -488,6 +509,86 @@ fn semicolon() -> impl Parser<u8, u8, Error = Simple<u8>> + Clone {
 mod tests {
     use super::*;
 
+    macro_rules! node {
+        ($(@$($label:expr),+;)? $name:expr $(, $addr:expr)? => { $( $stmt:expr );* }) => {
+            {
+                #[allow(unused_assignments, unused_mut)]
+                let mut address = None;
+                $( address = Some($addr.to_string()); )?
+
+                let id = NodeId::Name(NodeName {
+                    name: $name.to_string(),
+                    address,
+                });
+
+                Node {
+                    id,
+                    labels: vec![$( $( $label.into() ),* )?],
+                    contents: vec![$( $stmt.into() ),*],
+                    ommittable: false,
+                }
+            }
+        };
+    }
+
+    macro_rules! prop {
+        ($name:expr $(, $bits:expr )? => [ $( $v:expr ),* ]) => {
+            {
+                #[allow(unused_assignments, unused_mut)]
+                let mut storage_modifier = None;
+                $( storage_modifier = Some($bits); )?
+
+                Property {
+                    name: $name.into(),
+                    values: Some(vec![$( $v.into() ),*]),
+                    storage_modifier,
+                }
+            }
+        };
+        ($name:expr) => {
+            Property {
+                name: $name.into(),
+                values: None,
+                storage_modifier: None,
+            }
+        };
+    }
+
+    macro_rules! cells {
+        [$( $cell:expr ),*] => {
+            PropertyValue::CellArray(vec![$( $cell.into() ),*])
+        };
+    }
+
+    macro_rules! e {
+        ($e:expr) => {
+            Expression::from($e)
+        };
+    }
+
+    macro_rules! p {
+        ($p:expr) => {
+            Phandle::from($p.to_string())
+        };
+        [$($v:expr),*] => {
+            Phandle::from(vec![
+                $( $v.into() ),*
+            ])
+        };
+    }
+
+    impl From<i64> for Box<Expression> {
+        fn from(i: i64) -> Self {
+            Box::new(i.into())
+        }
+    }
+
+    impl From<char> for Box<Expression> {
+        fn from(c: char) -> Self {
+            Box::new(c.into())
+        }
+    }
+
     #[test]
     fn parse_unsigned_numbers() {
         for (input, expected) in [
@@ -697,144 +798,141 @@ mod tests {
 
     #[test]
     fn parse_property() {
-        use super::Phandle::*;
-        use Expression::*;
-        use PropertyCell::*;
-        use PropertyValue::*;
-
         for (input, expected) in [
-            (
-                r#"cache-unified;"#,
-                Property {
-                    name: "cache-unified".into(),
-                    values: None,
-                    storage_modifier: None,
-                },
-            ),
-            (
-                r#"reg = <0>;"#,
-                Property {
-                    name: "reg".into(),
-                    values: Some(vec![CellArray(vec![Expr(Lit(0.into()))])]),
-                    storage_modifier: None,
-                },
-            ),
+            (r#"cache-unified;"#, prop! { "cache-unified" }),
+            (r#"reg = <0>;"#, prop! { "reg" => [ cells![e!(0)] ] }),
             (
                 r#"cache-size = /bits/ 16 <0x8000>;"#,
-                Property {
-                    name: "cache-size".into(),
-                    values: Some(vec![CellArray(vec![Expr(Lit(0x8000.into()))])]),
-                    storage_modifier: Some(16),
-                },
+                prop! { "cache-size", 16 => [ cells![e!(0x8000)] ] },
             ),
             (
                 r#"next-level-cache = <&L2_0>;"#,
-                Property {
-                    name: "next-level-cache".into(),
-                    values: Some(vec![CellArray(vec![Label("L2_0".into()).into()])]),
-                    storage_modifier: None,
-                },
+                prop! { "next-level-cache" => [ cells![p!("L2_0")] ] },
             ),
             (
                 r#"interrupts = <17 0xc 'A'>;"#,
-                Property {
-                    name: "interrupts".into(),
-                    values: Some(vec![CellArray(vec![
-                        Expr(Lit(17.into())),
-                        Expr(Lit(0xc.into())),
-                        Expr(Lit('A'.into())),
-                    ])]),
-                    storage_modifier: None,
-                },
+                prop! { "interrupts" => [ cells![e!(17), e!(0xc), e!('A')] ] },
             ),
             (
                 r#"cpu = <&{/cpus/cpu@0}>;"#,
-                Property {
-                    name: "cpu".into(),
-                    values: Some(vec![CellArray(vec![Path(vec![
-                        ("cpus", None::<&str>).into(),
-                        ("cpu", Some("0")).into(),
-                    ])
-                    .into()])]),
-                    storage_modifier: None,
-                },
+                prop! { "cpu" => [ cells![p![("cpus", None::<&str>), ("cpu", Some("0"))]] ] },
             ),
-            (
-                r#"pinctrl-0 = <>;"#,
-                Property {
-                    name: "pinctrl-0".into(),
-                    values: Some(vec![PropertyValue::CellArray(vec![])]),
-                    storage_modifier: None,
-                },
-            ),
+            (r#"pinctrl-0 = <>;"#, prop! { "pinctrl-0" => [ cells![] ] }),
             (
                 r#"device_type = "cpu";"#,
-                Property {
-                    name: "device_type".into(),
-                    values: Some(vec![Str("cpu".into())]),
-                    storage_modifier: None,
-                },
+                prop! { "device_type" => [ "cpu" ] },
             ),
             (
                 r#"compatible = "ns16550", "ns8250";"#,
-                Property {
-                    name: "compatible".into(),
-                    values: Some(vec![Str("ns16550".into()), Str("ns8250".into())]),
-                    storage_modifier: None,
-                },
+                prop! { "compatible" => [ "ns16550", "ns8250" ] },
             ),
             (
                 r#"example = <&mpic 0xf00f0000 19>, "a strange property format";"#,
-                Property {
-                    name: "example".into(),
-                    values: Some(vec![
-                        CellArray(vec![
-                            Label("mpic".into()).into(),
-                            Expr(Lit(0xf00f_0000.into())),
-                            Expr(Lit(19.into())),
-                        ]),
-                        Str("a strange property format".into()),
-                    ]),
-                    storage_modifier: None,
+                prop! {
+                    "example" => [
+                        cells![p!("mpic"), e!(0xf00f0000), e!(19)],
+                        "a strange property format"
+                    ]
                 },
             ),
             (
                 r#"serial0 = &usart3;"#,
-                Property {
-                    name: "serial0".into(),
-                    values: Some(vec![PropertyValue::Phandle(Label("usart3".into()))]),
-                    storage_modifier: None,
-                },
+                prop! { "serial0" => [ p!("usart3") ] },
             ),
             (
                 r#"local-mac-address = [ 00 11 22 33 44 55 ];"#,
-                Property {
-                    name: "local-mac-address".into(),
-                    values: Some(vec![Bytestring(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])]),
-                    storage_modifier: None,
-                },
+                prop! { "local-mac-address" => [ vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55] ] },
             ),
             (
                 r#"local-mac-address = [001122334455];"#,
-                Property {
-                    name: "local-mac-address".into(),
-                    values: Some(vec![Bytestring(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])]),
-                    storage_modifier: None,
-                },
+                prop! { "local-mac-address" => [ vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55] ] },
             ),
             (
                 r#"prop = /bits/ 16 <0x1234 0x5678>, <0x9abc 0xdef0>;"#,
-                Property {
-                    name: "prop".into(),
-                    values: Some(vec![
-                        CellArray(vec![Expr(Lit(0x1234.into())), Expr(Lit(0x5678.into()))]),
-                        CellArray(vec![Expr(Lit(0x9abc.into())), Expr(Lit(0xdef0.into()))]),
-                    ]),
-                    storage_modifier: Some(16),
+                prop! {
+                    "prop", 16 => [
+                        cells![e!(0x1234), e!(0x5678)],
+                        cells![e!(0x9abc), e!(0xdef0)]
+                    ]
                 },
             ),
         ] {
             assert_eq!(expected, property().parse(dbg!(input).as_bytes()).unwrap());
+        }
+    }
+
+    #[test]
+    fn parse_node() {
+        for (input, expected) in [(
+            r#"cpus {
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                cpu@0 {
+                    device_type = "cpu";
+                    reg = <0>;
+                    cache-unified;
+                    cache-size = <0x8000>;
+                    cache-block-size = <32>;
+                    timebase-frequency = <82500000>;
+                    next-level-cache = <&L2_0>;
+
+                    L2_0:l2-cache {
+                        compatible = "cache";
+                    };
+                };
+
+                cpu@1 {
+                    device_type = "cpu";
+                    reg = <1>;
+
+                    L2: L2_1: l2-cache {
+                        compatible = "cache";
+                    };
+                };
+            };"#,
+            node! {
+                "cpus" => {
+                    prop! {"#address-cells" => [ cells!(e!(1)) ] };
+                    prop! {"#size-cells" => [ cells!(e!(0)) ] };
+
+                    node! {
+                        "cpu","0" => {
+                            prop! {"device_type" => [ "cpu" ] };
+                            prop! {"reg" => [ cells!(e!(0)) ] };
+                            prop! {"cache-unified" };
+                            prop! {"cache-size" => [ cells!(e!(0x8000)) ] };
+                            prop! {"cache-block-size" => [ cells!(e!(32)) ] };
+                            prop! {"timebase-frequency" => [ cells!(e!(82500000)) ] };
+                            prop! {"next-level-cache" => [ cells!(p!("L2_0")) ] };
+
+                            node! {
+                                @"L2_0"; "l2-cache" => {
+                                   prop! {"compatible" => [ "cache" ] }
+                                }
+                            }
+                        }
+                    };
+
+                    node! {
+                        "cpu","1" => {
+                            prop! {"device_type" => [ "cpu" ] };
+                            prop! {"reg" => [ cells!(e!(1)) ] };
+
+                            node! {
+                                @"L2", "L2_1"; "l2-cache" => {
+                                    prop! {"compatible" => [ "cache" ] }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        )] {
+            assert_eq!(
+                expected,
+                node(statements()).parse(dbg!(input).as_bytes()).unwrap()
+            );
         }
     }
 }

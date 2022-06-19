@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 chumsky = "0.8"
+derive_more = "0.99"
 
 [dev-dependencies]
 criterion = "0.3"
