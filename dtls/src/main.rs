@@ -41,14 +41,13 @@ fn main() {
 
     let expected = err
         .expected()
-        .filter_map(|c| c.map(|c| format!("'{}'", char::from(c))))
+        .filter_map(|c| c.map(|c| format!("'{c}'")))
         .collect::<Vec<_>>()
         .join(", ");
 
     let mut label_msg = format!("expected one of {expected}");
-
     if let Some(b) = err.found() {
-        label_msg += &format!(", found '{}'", char::from(*b));
+        label_msg += &format!(", found '{b}'");
     };
 
     Report::build(ReportKind::Error, name.clone(), 42)
