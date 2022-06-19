@@ -254,7 +254,6 @@ fn statements() -> impl Parser<char, Vec<Statement>, Error = Simple<char>> + Clo
         (node(stmts).map(Statement::from))
             .or(property().map(Statement::from))
             .or(directive().map(Statement::from))
-            .then_ignore(semicolon())
             .padded()
             .repeated()
     })
@@ -282,6 +281,7 @@ fn node(
     labels
         .then(node_id)
         .then(stmts.delimited_by(just('{').padded(), just('}').padded()))
+        .then_ignore(semicolon())
         .map(|((labels, node_id), contents)| Node {
             id: node_id,
             labels,
@@ -307,6 +307,7 @@ fn property() -> impl Parser<char, Property, Error = Simple<char>> + Clone {
     let bits = just("/bits/").padded().ignore_then(number());
 
     name.then((just('=').ignore_then(bits.or_not().then(values))).or_not())
+        .then_ignore(semicolon())
         .map(|(name, rest)| {
             let (storage_modifier, values) = rest
                 .map(|(bits, values)| (bits, Some(values)))
@@ -461,9 +462,23 @@ fn node_name() -> impl Parser<char, NodeName, Error = Simple<char>> + Clone {
 }
 
 fn directive() -> impl Parser<char, Directive, Error = Simple<char>> + Clone {
-    just("/dts-v1/")
+    let version = just("/dts-v1/")
         .to(Directive::Version(Version::V1))
+        .then_ignore(semicolon());
+
+    let include = just("/include/")
         .padded()
+        .ignore_then(file_path().delimited_by(just('"'), just('"')))
+        .map(|s| Directive::Include(Include::Dts(s)));
+
+    version.or(include)
+}
+
+fn file_path() -> impl Parser<char, String, Error = Simple<char>> + Clone {
+    filter(|c| !("\0\"<>".contains(*c)))
+        .repeated()
+        .at_least(1)
+        .collect()
 }
 
 fn string() -> impl Parser<char, String, Error = Simple<char>> + Clone {
@@ -804,6 +819,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_directives() {
+        for (input, expected) in [
+            ("/dts-v1/;", Directive::Version(Version::V1)),
+            (
+                "/include/ \"sama5.dtsi\"",
+                Directive::Include(Include::Dts("sama5.dtsi".into())),
+            ),
+            (
+                "/include/ \"overlays/sama5.dtsi\"",
+                Directive::Include(Include::Dts("overlays/sama5.dtsi".into())),
+            ),
+        ] {
+            assert_eq!(expected, directive().parse(dbg!(input)).unwrap());
+        }
+    }
+
+    #[test]
     fn parse_property() {
         for (input, expected) in [
             (r#"cache-unified;"#, prop! { "cache-unified" }),
@@ -878,72 +910,83 @@ mod tests {
 
     #[test]
     fn parse_node() {
-        for (input, expected) in [(
-            r#"a-very-very-veeeeeery-looooong-node-name-which-should-not-fail {
-                #address-cells = <1>;
-                #size-cells = <0>;
+        for (input, expected) in [
+            (
+                r#"&tps {};"#,
+                Node {
+                    id: NodeId::Phandle(Phandle::Label("tps".into())),
+                    labels: vec![],
+                    contents: vec![],
+                    ommittable: false,
+                },
+            ),
+            (
+                r#"a-very-very-veeeeeery-looooong-node-name-which-should-not-fail {
+                    #address-cells = <1>;
+                    #size-cells = <0>;
 
-                cpu@0 {
-                    device_type = "cpu";
-                    reg = <0>;
-                    cache-unified;
-                    cache-size = <0x8000>;
-                    cache-block-size = <32>;
-                    timebase-frequency = <82500000>;
-                    next-level-cache = <&L2_0>;
+                    cpu@0 {
+                        device_type = "cpu";
+                        reg = <0>;
+                        cache-unified;
+                        cache-size = <0x8000>;
+                        cache-block-size = <32>;
+                        timebase-frequency = <82500000>;
+                        next-level-cache = <&L2_0>;
 
-                    L2_0:l2-cache {
-                        compatible = "cache";
+                        L2_0:l2-cache {
+                            compatible = "cache";
+                        };
                     };
-                };
 
-                cpu@1 {
-                    device_type = "cpu";
-                    reg = <1>;
+                    cpu@1 {
+                        device_type = "cpu";
+                        reg = <1>;
 
-                    L2: L2_1: l2-cache {
-                        compatible = "cache";
+                        L2: L2_1: l2-cache {
+                            compatible = "cache";
+                        };
                     };
-                };
-            };"#,
-            node! {
-                "a-very-very-veeeeeery-looooong-node-name-which-should-not-fail" => {
-                    prop! {"#address-cells" => [ cells!(e!(1)) ] };
-                    prop! {"#size-cells" => [ cells!(e!(0)) ] };
+                };"#,
+                node! {
+                    "a-very-very-veeeeeery-looooong-node-name-which-should-not-fail" => {
+                        prop! {"#address-cells" => [ cells!(e!(1)) ] };
+                        prop! {"#size-cells" => [ cells!(e!(0)) ] };
 
-                    node! {
-                        "cpu","0" => {
-                            prop! {"device_type" => [ "cpu" ] };
-                            prop! {"reg" => [ cells!(e!(0)) ] };
-                            prop! {"cache-unified" };
-                            prop! {"cache-size" => [ cells!(e!(0x8000)) ] };
-                            prop! {"cache-block-size" => [ cells!(e!(32)) ] };
-                            prop! {"timebase-frequency" => [ cells!(e!(82500000)) ] };
-                            prop! {"next-level-cache" => [ cells!(p!("L2_0")) ] };
+                        node! {
+                            "cpu","0" => {
+                                prop! {"device_type" => [ "cpu" ] };
+                                prop! {"reg" => [ cells!(e!(0)) ] };
+                                prop! {"cache-unified" };
+                                prop! {"cache-size" => [ cells!(e!(0x8000)) ] };
+                                prop! {"cache-block-size" => [ cells!(e!(32)) ] };
+                                prop! {"timebase-frequency" => [ cells!(e!(82500000)) ] };
+                                prop! {"next-level-cache" => [ cells!(p!("L2_0")) ] };
 
-                            node! {
-                                @"L2_0"; "l2-cache" => {
-                                   prop! {"compatible" => [ "cache" ] }
+                                node! {
+                                    @"L2_0"; "l2-cache" => {
+                                       prop! {"compatible" => [ "cache" ] }
+                                    }
                                 }
                             }
-                        }
-                    };
+                        };
 
-                    node! {
-                        "cpu","1" => {
-                            prop! {"device_type" => [ "cpu" ] };
-                            prop! {"reg" => [ cells!(e!(1)) ] };
+                        node! {
+                            "cpu","1" => {
+                                prop! {"device_type" => [ "cpu" ] };
+                                prop! {"reg" => [ cells!(e!(1)) ] };
 
-                            node! {
-                                @"L2", "L2_1"; "l2-cache" => {
-                                    prop! {"compatible" => [ "cache" ] }
+                                node! {
+                                    @"L2", "L2_1"; "l2-cache" => {
+                                        prop! {"compatible" => [ "cache" ] }
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            },
-        )] {
+                },
+            ),
+        ] {
             assert_eq!(expected, node(statements()).parse(dbg!(input)).unwrap());
         }
     }
