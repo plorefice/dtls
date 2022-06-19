@@ -241,8 +241,8 @@ pub enum Version {
     V1,
 }
 
-pub fn from_str(s: &str) -> Vec<Statement> {
-    parser().parse(s.as_bytes()).unwrap()
+pub fn from_str(s: &str) -> Result<Vec<Statement>, Vec<Simple<u8>>> {
+    parser().parse(s.as_bytes())
 }
 
 fn parser() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> + Clone {

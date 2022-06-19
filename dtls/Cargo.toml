@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 dts-parser = { version = "0.1.0", path = "../dts-parser" }
+chumsky = "0.8"
+ariadne = "0.1"
