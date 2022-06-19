@@ -241,19 +241,19 @@ pub enum Version {
     V1,
 }
 
-pub fn from_str(s: &str) -> Result<Vec<Statement>, Vec<Simple<u8>>> {
-    parser().parse(s.as_bytes())
+pub fn from_str(s: &str) -> Result<Vec<Statement>, Vec<Simple<char>>> {
+    parser().parse(s)
 }
 
-fn parser() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> + Clone {
+fn parser() -> impl Parser<char, Vec<Statement>, Error = Simple<char>> + Clone {
     statements().then_ignore(end())
 }
 
-fn statements() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> + Clone {
+fn statements() -> impl Parser<char, Vec<Statement>, Error = Simple<char>> + Clone {
     recursive(|stmts| {
-        (node(stmts).map(Statement::Node))
-            .or(property().map(Statement::Property))
-            .or(directive().map(Statement::Directive))
+        (node(stmts).map(Statement::from))
+            .or(property().map(Statement::from))
+            .or(directive().map(Statement::from))
             .then_ignore(semicolon())
             .padded()
             .repeated()
@@ -261,40 +261,40 @@ fn statements() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> + Clone {
 }
 
 fn node(
-    stmts: impl Parser<u8, Vec<Statement>, Error = Simple<u8>> + Clone,
-) -> impl Parser<u8, Node, Error = Simple<u8>> + Clone {
+    stmts: impl Parser<char, Vec<Statement>, Error = Simple<char>> + Clone,
+) -> impl Parser<char, Node, Error = Simple<char>> + Clone {
     let labels = node_label()
-        .then_ignore(just(b':').padded())
+        .then_ignore(just(':').padded())
         .padded()
         .repeated();
 
-    let root_name = just(b'/')
+    let root_name = just('/')
         .map(|_| NodeName {
             name: "/".to_string(),
             address: None,
         })
         .padded();
 
-    let node_id = (node_name().or(root_name).map(NodeId::Name))
-        .or(phandle().map(NodeId::Phandle))
+    let node_id = (node_name().or(root_name).map(NodeId::from))
+        .or(phandle().map(NodeId::from))
         .padded();
 
     labels
-        .or_not()
         .then(node_id)
-        .then(stmts.delimited_by(just(b'{').padded(), just(b'}').padded()))
+        .then(stmts.delimited_by(just('{').padded(), just('}').padded()))
         .map(|((labels, node_id), contents)| Node {
             id: node_id,
-            labels: labels.unwrap_or_default(),
+            labels,
             contents,
             ommittable: false,
         })
 }
 
-fn property() -> impl Parser<u8, Property, Error = Simple<u8>> + Clone {
-    let name = filter(|c: &u8| c.is_ascii_alphanumeric() || b",._+?#-".contains(c))
+fn property() -> impl Parser<char, Property, Error = Simple<char>> + Clone {
+    let name = filter(|c: &char| c.is_ascii_alphanumeric() || ",._+?#-".contains(*c))
         .repeated()
         .at_least(1) // there should be a maximum of 31, but apparently it's not enforced
+        .collect()
         .padded();
 
     let value = (cell_array().map(PropertyValue::CellArray))
@@ -302,27 +302,27 @@ fn property() -> impl Parser<u8, Property, Error = Simple<u8>> + Clone {
         .or(phandle().map(PropertyValue::Phandle))
         .or(string().map(PropertyValue::Str));
 
-    let values = value.padded().separated_by(just(b',').padded());
+    let values = value.padded().separated_by(just(',').padded());
 
-    let bits = just(b"/bits/").padded().ignore_then(number());
+    let bits = just("/bits/").padded().ignore_then(number());
 
-    name.then((just(b'=').ignore_then(bits.or_not().then(values))).or_not())
+    name.then((just('=').ignore_then(bits.or_not().then(values))).or_not())
         .map(|(name, rest)| {
             let (storage_modifier, values) = rest
                 .map(|(bits, values)| (bits, Some(values)))
                 .unwrap_or((None, None));
 
             Property {
-                name: String::from_utf8(name).unwrap(),
+                name,
                 values,
                 storage_modifier,
             }
         })
 }
 
-fn cell_array() -> impl Parser<u8, Vec<PropertyCell>, Error = Simple<u8>> + Clone {
+fn cell_array() -> impl Parser<char, Vec<PropertyCell>, Error = Simple<char>> + Clone {
     let expr = literal()
-        .or(expr().delimited_by(just(b'('), just(b')')))
+        .or(expr().delimited_by(just('('), just(')')))
         .map(PropertyCell::Expr);
 
     let phandle = phandle().map(PropertyCell::Phandle);
@@ -330,25 +330,26 @@ fn cell_array() -> impl Parser<u8, Vec<PropertyCell>, Error = Simple<u8>> + Clon
     (phandle.or(expr))
         .padded()
         .repeated()
-        .delimited_by(just(b'<'), just(b'>'))
+        .delimited_by(just('<'), just('>'))
         .collect()
 }
 
-fn byte_string() -> impl Parser<u8, Vec<u8>, Error = Simple<u8>> + Clone {
-    let byte = filter(|c: &u8| c.is_ascii_hexdigit())
+fn byte_string() -> impl Parser<char, Vec<u8>, Error = Simple<char>> + Clone {
+    let byte = filter(char::is_ascii_hexdigit)
         .repeated()
         .exactly(2)
-        .map(|s| u8::from_str_radix(str::from_utf8(&s).unwrap(), 16))
+        .collect::<String>()
+        .map(|s| u8::from_str_radix(&s, 16))
         .unwrapped()
         .padded();
 
     byte.repeated()
-        .delimited_by(just(b'['), just(b']'))
+        .delimited_by(just('['), just(']'))
         .padded()
         .collect()
 }
 
-fn expr() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
+fn expr() -> impl Parser<char, Expression, Error = Simple<char>> + Clone {
     macro_rules! bin_op {
         ($p:expr, $op:expr) => {
             $p.clone()
@@ -360,12 +361,12 @@ fn expr() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
 
     recursive(|expr| {
         let atom = literal()
-            .or(expr.delimited_by(just(b'('), just(b')')))
+            .or(expr.delimited_by(just('('), just(')')))
             .padded();
 
-        let unary = (just(b'-').to(UnaryOp::Neg))
-            .or(just(b'~').to(UnaryOp::BitNot))
-            .or(just(b'!').to(UnaryOp::LogicalNot))
+        let unary = (just('-').to(UnaryOp::Neg))
+            .or(just('~').to(UnaryOp::BitNot))
+            .or(just('!').to(UnaryOp::LogicalNot))
             .padded()
             .repeated()
             .then(atom)
@@ -374,48 +375,48 @@ fn expr() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
         let binary = {
             let product = bin_op!(
                 unary,
-                (just(b'*').to(BinaryOp::Mul))
-                    .or(just(b'/').to(BinaryOp::Div))
-                    .or(just(b'/').to(BinaryOp::Mod))
+                (just('*').to(BinaryOp::Mul))
+                    .or(just('/').to(BinaryOp::Div))
+                    .or(just('/').to(BinaryOp::Mod))
             );
 
             let sum = bin_op!(
                 product,
-                (just(b'+').to(BinaryOp::Add)).or(just(b'-').to(BinaryOp::Sub))
+                (just('+').to(BinaryOp::Add)).or(just('-').to(BinaryOp::Sub))
             );
 
             let bitshift = bin_op!(
                 sum,
-                (just(b"<<").to(BinaryOp::LShift)).or(just(b">>").to(BinaryOp::RShift))
+                (just("<<").to(BinaryOp::LShift)).or(just(">>").to(BinaryOp::RShift))
             );
 
             let comparison = bin_op!(
                 bitshift,
-                (just(b"<=").to(BinaryOp::Le))
-                    .or(just(b">=").to(BinaryOp::Ge))
-                    .or(just(b"<").to(BinaryOp::Lt))
-                    .or(just(b">").to(BinaryOp::Gt))
+                (just("<=").to(BinaryOp::Le))
+                    .or(just(">=").to(BinaryOp::Ge))
+                    .or(just("<").to(BinaryOp::Lt))
+                    .or(just(">").to(BinaryOp::Gt))
             );
 
             let equality = bin_op!(
                 comparison,
-                (just(b"==").to(BinaryOp::Eq)).or(just(b"!=").to(BinaryOp::Neq))
+                (just("==").to(BinaryOp::Eq)).or(just("!=").to(BinaryOp::Neq))
             );
 
-            let bit_and = bin_op!(equality, (just(b'&').to(BinaryOp::BitAnd)));
-            let bit_xor = bin_op!(bit_and, (just(b'^').to(BinaryOp::BitXor)));
-            let bit_or = bin_op!(bit_xor, (just(b'|').to(BinaryOp::BitOr)));
+            let bit_and = bin_op!(equality, (just('&').to(BinaryOp::BitAnd)));
+            let bit_xor = bin_op!(bit_and, (just('^').to(BinaryOp::BitXor)));
+            let bit_or = bin_op!(bit_xor, (just('|').to(BinaryOp::BitOr)));
 
-            let and = bin_op!(bit_or, (just(b"&&").to(BinaryOp::And)));
-            bin_op!(and, (just(b"||").to(BinaryOp::Or)))
+            let and = bin_op!(bit_or, (just("&&").to(BinaryOp::And)));
+            bin_op!(and, (just("||").to(BinaryOp::Or)))
         };
 
         // A ternary expression (lowest precedence), or a simple expression if not ternary
         (binary.clone())
             .then(
-                just(b'?')
+                just('?')
                     .ignore_then(binary.clone())
-                    .then_ignore(just(b':'))
+                    .then_ignore(just(':'))
                     .then(binary)
                     .or_not(),
             )
@@ -430,89 +431,84 @@ fn expr() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
     })
 }
 
-fn phandle() -> impl Parser<u8, Phandle, Error = Simple<u8>> + Clone {
+fn phandle() -> impl Parser<char, Phandle, Error = Simple<char>> + Clone {
     let label = node_label().map(Phandle::Label);
 
     let path = node_path()
-        .delimited_by(just(b'{'), just(b'}'))
+        .delimited_by(just('{'), just('}'))
         .map(Phandle::Path);
 
-    just(b'&').ignore_then(path.or(label))
+    just('&').ignore_then(path.or(label))
 }
 
-fn node_label() -> impl Parser<u8, String, Error = Simple<u8>> + Clone {
-    text::ident().map(|s| String::from_utf8(s).unwrap())
+fn node_label() -> impl Parser<char, String, Error = Simple<char>> + Clone {
+    text::ident()
 }
 
-fn node_path() -> impl Parser<u8, Vec<NodeName>, Error = Simple<u8>> + Clone {
-    just(b'/').ignore_then(node_name().separated_by(just(b'/')))
+fn node_path() -> impl Parser<char, Vec<NodeName>, Error = Simple<char>> + Clone {
+    just('/').ignore_then(node_name().separated_by(just('/')))
 }
 
-fn node_name() -> impl Parser<u8, NodeName, Error = Simple<u8>> + Clone {
-    let ident = filter(|c: &u8| c.is_ascii_alphanumeric() || b",._+-".contains(c))
+fn node_name() -> impl Parser<char, NodeName, Error = Simple<char>> + Clone {
+    let ident = filter(|c: &char| c.is_ascii_alphanumeric() || ",._+-".contains(*c))
         .repeated()
-        .at_least(1); // there should be a maximum of 31, but apparently it's not enforced
+        .at_least(1)
+        .collect(); // there should be a maximum of 31, but apparently it's not enforced
 
     ident
-        .then(just(b'@').ignore_then(ident).or_not())
-        .map(|(name, addr)| NodeName {
-            name: String::from_utf8(name).unwrap(),
-            address: addr.map(|addr| String::from_utf8(addr).unwrap()),
-        })
+        .then(just('@').ignore_then(ident).or_not())
+        .map(|(name, address)| NodeName { name, address })
 }
 
-fn directive() -> impl Parser<u8, Directive, Error = Simple<u8>> + Clone {
-    just(b"/dts-v1/")
+fn directive() -> impl Parser<char, Directive, Error = Simple<char>> + Clone {
+    just("/dts-v1/")
         .to(Directive::Version(Version::V1))
         .padded()
 }
 
-fn string() -> impl Parser<u8, String, Error = Simple<u8>> + Clone {
-    let escape = just(b'\\').ignore_then(one_of(b"\\/\""));
+fn string() -> impl Parser<char, String, Error = Simple<char>> + Clone {
+    let escape = just('\\').ignore_then(one_of("\\/\""));
 
-    just(b'"')
-        .ignore_then(
-            filter(|c: &u8| *c != b'\\' && *c != b'"')
-                .or(escape)
-                .repeated(),
-        )
-        .then_ignore(just(b'"'))
-        .map(|v| String::from_utf8(v).unwrap())
+    just('"')
+        .ignore_then(filter(|c| *c != '\\' && *c != '"').or(escape).repeated())
+        .then_ignore(just('"'))
+        .collect()
 }
 
-fn literal() -> impl Parser<u8, Expression, Error = Simple<u8>> + Clone {
+fn literal() -> impl Parser<char, Expression, Error = Simple<char>> + Clone {
     let int = number().map(IntLiteral::Num).padded();
 
-    let char_ = filter(u8::is_ascii_graphic)
-        .delimited_by(just(b'\''), just(b'\''))
-        .map(|c| IntLiteral::Char(c as char))
+    let char_ = filter(char::is_ascii_graphic)
+        .delimited_by(just('\''), just('\''))
+        .map(IntLiteral::Char)
         .padded();
 
     int.or(char_).map(Expression::Lit)
 }
 
-fn number() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
+fn number() -> impl Parser<char, i64, Error = Simple<char>> + Clone {
     hex().or(dec())
 }
 
-fn hex() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
-    (just(b"0x").or(just(b"0X")))
+fn hex() -> impl Parser<char, i64, Error = Simple<char>> + Clone {
+    (just("0x").or(just("0X")))
         .ignore_then(
             // text::int() won't parse hex numbers with leading zeros.
             // In this case, we first try to apply the parser after consuming the leading zeros.
-            (just(b'0').repeated().chain(text::int(16)))
+            (just('0').repeated().chain(text::int(16)))
                 // If that fails, we fall back on a zero-only parser.
-                .or(just(b'0').repeated().at_least(1)),
+                .or(just('0').repeated().at_least(1)),
         )
-        .map(|vs: Vec<u8>| i64::from_str_radix(str::from_utf8(&vs).unwrap(), 16).unwrap())
+        .collect()
+        .map(|s: String| i64::from_str_radix(&s, 16).unwrap())
 }
 
-fn dec() -> impl Parser<u8, i64, Error = Simple<u8>> + Clone {
-    text::int(10).map(|vs: Vec<u8>| str::from_utf8(&vs).unwrap().parse::<i64>().unwrap())
+fn dec() -> impl Parser<char, i64, Error = Simple<char>> + Clone {
+    text::int(10).map(|s: String| s.parse::<i64>().unwrap())
 }
 
-fn semicolon() -> impl Parser<u8, u8, Error = Simple<u8>> + Clone {
-    just(b';').padded()
+fn semicolon() -> impl Parser<char, char, Error = Simple<char>> + Clone {
+    just(';').padded()
 }
 
 #[cfg(test)]
@@ -615,7 +611,7 @@ mod tests {
         ] {
             assert_eq!(
                 Expression::Lit(expected.into()),
-                expr().parse(dbg!(input).as_bytes()).unwrap()
+                expr().parse(dbg!(input)).unwrap()
             );
         }
     }
@@ -634,7 +630,7 @@ mod tests {
         ] {
             assert_eq!(
                 Unary(UnaryOp::Neg, expected.into()),
-                expr().parse(dbg!(input).as_bytes()).unwrap()
+                expr().parse(dbg!(input)).unwrap()
             );
         }
     }
@@ -644,7 +640,7 @@ mod tests {
         for c in "0618jaAfJzaiw)k+1'-_!?".chars() {
             assert_eq!(
                 Expression::Lit(c.into()),
-                expr().parse(format!("'{}'", c).as_bytes()).unwrap()
+                expr().parse(format!("'{}'", c)).unwrap()
             );
         }
     }
@@ -663,7 +659,7 @@ mod tests {
                 Unary(LogicalNot, Unary(LogicalNot, 0.into()).into()),
             ),
         ] {
-            let expr = expr().parse(dbg!(input).as_bytes()).unwrap();
+            let expr = expr().parse(dbg!(input)).unwrap();
 
             assert_eq!(ast, expr);
             assert_eq!(res, expr.eval());
@@ -726,7 +722,7 @@ mod tests {
                 },
             ),
         ] {
-            let expr = expr().parse(dbg!(input).as_bytes()).unwrap();
+            let expr = expr().parse(dbg!(input)).unwrap();
 
             assert_eq!(ast, expr);
             assert_eq!(res, expr.eval());
@@ -745,7 +741,7 @@ mod tests {
             ("uart@fe001000", ("uart", Some("fe001000")).into()),
         ] as [(_, NodeName); 7]
         {
-            assert_eq!(expected, node_name().parse(dbg!(input).as_bytes()).unwrap());
+            assert_eq!(expected, node_name().parse(dbg!(input)).unwrap());
         }
     }
 
@@ -761,7 +757,7 @@ mod tests {
             ),
         ] as [(_, Phandle); 4]
         {
-            assert_eq!(expected, phandle().parse(dbg!(input).as_bytes()).unwrap());
+            assert_eq!(expected, phandle().parse(dbg!(input)).unwrap());
         }
     }
 
@@ -803,10 +799,7 @@ mod tests {
                 ],
             ),
         ] {
-            assert_eq!(
-                expected,
-                cell_array().parse(dbg!(input).as_bytes()).unwrap()
-            );
+            assert_eq!(expected, cell_array().parse(dbg!(input)).unwrap());
         }
     }
 
@@ -879,7 +872,7 @@ mod tests {
                 prop! { "a-very-very-veeeeeery-looooong-property-name-which-should-not-fail" },
             ),
         ] {
-            assert_eq!(expected, property().parse(dbg!(input).as_bytes()).unwrap());
+            assert_eq!(expected, property().parse(dbg!(input)).unwrap());
         }
     }
 
@@ -951,10 +944,7 @@ mod tests {
                 }
             },
         )] {
-            assert_eq!(
-                expected,
-                node(statements()).parse(dbg!(input).as_bytes()).unwrap()
-            );
+            assert_eq!(expected, node(statements()).parse(dbg!(input)).unwrap());
         }
     }
 }
