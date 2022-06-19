@@ -3,6 +3,7 @@ use std::str;
 use chumsky::prelude::*;
 use derive_more::From;
 
+mod lexer;
 mod parser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
