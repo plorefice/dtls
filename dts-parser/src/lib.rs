@@ -245,14 +245,15 @@ pub fn from_str(s: &str) -> Vec<Statement> {
     parser().parse(s.as_bytes()).unwrap()
 }
 
-fn parser() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> {
+fn parser() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> + Clone {
     statements().then_ignore(end())
 }
 
-fn statements() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> {
+fn statements() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> + Clone {
     recursive(|stmts| {
         (node(stmts).map(Statement::Node))
             .or(property().map(Statement::Property))
+            .or(directive().map(Statement::Directive))
             .then_ignore(semicolon())
             .padded()
             .repeated()
@@ -260,8 +261,8 @@ fn statements() -> impl Parser<u8, Vec<Statement>, Error = Simple<u8>> {
 }
 
 fn node(
-    stmts: impl Parser<u8, Vec<Statement>, Error = Simple<u8>>,
-) -> impl Parser<u8, Node, Error = Simple<u8>> {
+    stmts: impl Parser<u8, Vec<Statement>, Error = Simple<u8>> + Clone,
+) -> impl Parser<u8, Node, Error = Simple<u8>> + Clone {
     let labels = node_label()
         .then_ignore(just(b':').padded())
         .padded()
@@ -290,7 +291,7 @@ fn node(
         })
 }
 
-fn property() -> impl Parser<u8, Property, Error = Simple<u8>> {
+fn property() -> impl Parser<u8, Property, Error = Simple<u8>> + Clone {
     let name = filter(|c: &u8| c.is_ascii_alphanumeric() || b",._+?#-".contains(c))
         .repeated()
         .at_least(1)
@@ -320,7 +321,7 @@ fn property() -> impl Parser<u8, Property, Error = Simple<u8>> {
         })
 }
 
-fn cell_array() -> impl Parser<u8, Vec<PropertyCell>, Error = Simple<u8>> {
+fn cell_array() -> impl Parser<u8, Vec<PropertyCell>, Error = Simple<u8>> + Clone {
     let expr = literal()
         .or(expr().delimited_by(just(b'('), just(b')')))
         .map(PropertyCell::Expr);
@@ -334,7 +335,7 @@ fn cell_array() -> impl Parser<u8, Vec<PropertyCell>, Error = Simple<u8>> {
         .collect()
 }
 
-fn byte_string() -> impl Parser<u8, Vec<u8>, Error = Simple<u8>> {
+fn byte_string() -> impl Parser<u8, Vec<u8>, Error = Simple<u8>> + Clone {
     let byte = filter(|c: &u8| c.is_ascii_hexdigit())
         .repeated()
         .exactly(2)
@@ -460,6 +461,12 @@ fn node_name() -> impl Parser<u8, NodeName, Error = Simple<u8>> + Clone {
             name: String::from_utf8(name).unwrap(),
             address: addr.map(|addr| String::from_utf8(addr).unwrap()),
         })
+}
+
+fn directive() -> impl Parser<u8, Directive, Error = Simple<u8>> + Clone {
+    just(b"/dts-v1/")
+        .to(Directive::Version(Version::V1))
+        .padded()
 }
 
 fn string() -> impl Parser<u8, String, Error = Simple<u8>> + Clone {
