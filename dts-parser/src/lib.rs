@@ -267,19 +267,8 @@ fn node(
         .padded()
         .repeated();
 
-    let root_name = just('/')
-        .map(|_| NodeName {
-            name: "/".to_string(),
-            address: None,
-        })
-        .padded();
-
-    let node_id = (node_name().or(root_name).map(NodeId::from))
-        .or(phandle().map(NodeId::from))
-        .padded();
-
     labels
-        .then(node_id)
+        .then(node_id())
         .then(stmts.delimited_by(just('{').padded(), just('}').padded()))
         .then_ignore(semicolon())
         .map(|((labels, node_id), contents)| Node {
@@ -291,12 +280,6 @@ fn node(
 }
 
 fn property() -> impl Parser<char, Property, Error = Simple<char>> + Clone {
-    let name = filter(|c: &char| c.is_ascii_alphanumeric() || ",._+?#-".contains(*c))
-        .repeated()
-        .at_least(1) // there should be a maximum of 31, but apparently it's not enforced
-        .collect()
-        .padded();
-
     let value = (cell_array().map(PropertyValue::CellArray))
         .or(byte_string().map(PropertyValue::Bytestring))
         .or(phandle().map(PropertyValue::Phandle))
@@ -306,7 +289,8 @@ fn property() -> impl Parser<char, Property, Error = Simple<char>> + Clone {
 
     let bits = just("/bits/").padded().ignore_then(number());
 
-    name.then((just('=').ignore_then(bits.or_not().then(values))).or_not())
+    property_name()
+        .then((just('=').ignore_then(bits.or_not().then(values))).or_not())
         .then_ignore(semicolon())
         .map(|(name, rest)| {
             let (storage_modifier, values) = rest
@@ -319,6 +303,14 @@ fn property() -> impl Parser<char, Property, Error = Simple<char>> + Clone {
                 storage_modifier,
             }
         })
+}
+
+fn property_name() -> impl Parser<char, String, Error = Simple<char>> + Clone {
+    filter(|c: &char| c.is_ascii_alphanumeric() || ",._+?#-".contains(*c))
+        .repeated()
+        .at_least(1) // there should be a maximum of 31, but apparently it's not enforced
+        .collect()
+        .padded()
 }
 
 fn cell_array() -> impl Parser<char, Vec<PropertyCell>, Error = Simple<char>> + Clone {
@@ -432,6 +424,19 @@ fn expr() -> impl Parser<char, Expression, Error = Simple<char>> + Clone {
     })
 }
 
+fn node_id() -> impl Parser<char, NodeId, Error = Simple<char>> + Clone {
+    let root_name = just('/')
+        .map(|_| NodeName {
+            name: "/".to_string(),
+            address: None,
+        })
+        .padded();
+
+    (node_name().or(root_name).map(NodeId::from))
+        .or(phandle().map(NodeId::from))
+        .padded()
+}
+
 fn phandle() -> impl Parser<char, Phandle, Error = Simple<char>> + Clone {
     let label = node_label().map(Phandle::Label);
 
@@ -471,7 +476,19 @@ fn directive() -> impl Parser<char, Directive, Error = Simple<char>> + Clone {
         .ignore_then(file_path().delimited_by(just('"'), just('"')))
         .map(|s| Directive::Include(Include::Dts(s)));
 
-    version.or(include)
+    let delete_property = just("/delete-property/")
+        .padded()
+        .ignore_then(property_name())
+        .then_ignore(semicolon())
+        .map(Directive::DeleteProperty);
+
+    let delete_node = just("/delete-node/")
+        .padded()
+        .ignore_then(node_id())
+        .then_ignore(semicolon())
+        .map(Directive::DeleteNode);
+
+    version.or(include).or(delete_property).or(delete_node)
 }
 
 fn file_path() -> impl Parser<char, String, Error = Simple<char>> + Clone {
@@ -823,12 +840,30 @@ mod tests {
         for (input, expected) in [
             ("/dts-v1/;", Directive::Version(Version::V1)),
             (
-                "/include/ \"sama5.dtsi\"",
+                r#"/include/ "sama5.dtsi""#,
                 Directive::Include(Include::Dts("sama5.dtsi".into())),
             ),
             (
-                "/include/ \"overlays/sama5.dtsi\"",
+                r#"/include/ "overlays/sama5.dtsi""#,
                 Directive::Include(Include::Dts("overlays/sama5.dtsi".into())),
+            ),
+            (
+                "/delete-property/ ti,pmic-shutdown-controller;",
+                Directive::DeleteProperty("ti,pmic-shutdown-controller".into()),
+            ),
+            (
+                "/delete-node/ &aes1_target;",
+                Directive::DeleteNode(Phandle::Label("aes1_target".into()).into()),
+            ),
+            (
+                "/delete-node/regulator-vcc-sdhci0;",
+                Directive::DeleteNode(
+                    NodeName {
+                        name: "regulator-vcc-sdhci0".into(),
+                        address: None,
+                    }
+                    .into(),
+                ),
             ),
         ] {
             assert_eq!(expected, directive().parse(dbg!(input)).unwrap());
