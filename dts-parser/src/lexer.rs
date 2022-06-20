@@ -112,8 +112,15 @@ pub(crate) fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<ch
         .or(ident)
         .recover_with(skip_then_retry_until([]));
 
+    // A parser for line comments
+    let line_comment = just("//").then(take_until(just('\n'))).ignored().padded();
+
+    // A parser for block comments
+    let block_comment = just("/*").then(take_until(just("*/"))).ignored().padded();
+
     token
         .map_with_span(|tok, span| (tok, span))
+        .padded_by(line_comment.or(block_comment).repeated())
         .padded()
         .repeated()
 }
@@ -223,6 +230,20 @@ mod tests {
             ("/memreserve/", Token::MemReserve),
         ] {
             assert_eq!(expected, lexer().parse(dbg!(input)).unwrap()[0].0);
+        }
+    }
+
+    #[test]
+    fn comments() {
+        for (input, expected) in [
+            ("/* test */ cpu", Token::Ident("cpu".into())),
+            ("/* multiline\ncomment */ cpu", Token::Ident("cpu".into())),
+            ("cpu // test", Token::Ident("cpu".into())),
+        ] {
+            assert_eq!(
+                expected,
+                lexer().then_ignore(end()).parse(dbg!(input)).unwrap()[0].0
+            );
         }
     }
 }
