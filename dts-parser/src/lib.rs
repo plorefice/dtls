@@ -1,19 +1,21 @@
 use std::str;
 
-use chumsky::prelude::*;
+use chumsky::{prelude::*, Stream};
 use derive_more::From;
+
+use crate::lexer::{lexer, Spanned, Token};
 
 mod lexer;
 mod parser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dts(Vec<Statement>);
+pub struct Dts(Vec<Spanned<Statement>>);
 
 #[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum Statement {
-    Node(Node),
-    Property(Property),
-    Directive(Directive),
+    Node(Spanned<Node>),
+    Property(Spanned<Property>),
+    Directive(Spanned<Directive>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +250,14 @@ pub enum Version {
 }
 
 /// Parse the contents of a string as a Devicetree file.
-pub fn from_str(s: &str) -> Result<Dts, Vec<Simple<char>>> {
-    parser::parser().parse(s).map(Dts)
+pub fn from_str(src: &str) -> (Option<Dts>, Vec<Simple<Token>>) {
+    let (tokens, errs) = lexer().parse_recovery(src);
+
+    match tokens {
+        Some(tokens) => {
+            let len = src.chars().count();
+            parser::parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()))
+        }
+        None => panic!("{errs:?}"),
+    }
 }

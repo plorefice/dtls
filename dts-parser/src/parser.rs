@@ -1,15 +1,18 @@
 use chumsky::prelude::*;
 
-use crate::*;
+use crate::{
+    lexer::{Spanned, Token},
+    *,
+};
 
 /// Entry point of the parser.
 ///
 /// This function will parse a top-level Devicetree file and return a sequence of statements.
-pub(super) fn parser() -> impl Parser<char, Vec<Statement>, Error = Simple<char>> + Clone {
-    statements().then_ignore(end())
+pub(super) fn parser() -> impl Parser<Token, Dts, Error = Simple<Token>> + Clone {
+    statements().then_ignore(end()).map(Dts)
 }
 
-fn statements() -> impl Parser<char, Vec<Statement>, Error = Simple<char>> + Clone {
+fn statements() -> impl Parser<Token, Vec<Spanned<Statement>>, Error = Simple<Token>> + Clone {
     recursive(|stmts| {
         (node(stmts).map(Statement::from))
             .or(property().map(Statement::from))
@@ -20,20 +23,19 @@ fn statements() -> impl Parser<char, Vec<Statement>, Error = Simple<char>> + Clo
 }
 
 fn node(
-    stmts: impl Parser<char, Vec<Statement>, Error = Simple<char>> + Clone,
-) -> impl Parser<char, Node, Error = Simple<char>> + Clone {
+    stmts: impl Parser<Token, Vec<Spanned<Statement>>, Error = Simple<Token>> + Clone,
+) -> impl Parser<Token, Spanned<Node>, Error = Simple<Token>> + Clone {
     let labels = node_label()
-        .then_ignore(just(':').padded())
-        .padded()
+        .then_ignore(just(Token::Op(":".into())))
         .repeated();
 
-    let omittable = just("/omit-if-no-ref/").padded().or_not();
+    let omittable = just(Token::OmitIfNoRef).or_not();
 
     omittable
         .then(labels)
         .then(node_id())
-        .then(stmts.delimited_by(just('{').padded(), just('}').padded()))
-        .then_ignore(semicolon())
+        .then(stmts.delimited_by(Token::Ctrl('{'), Token::Ctrl('}')))
+        .then_ignore(Token::Ctrl(';'))
         .map(|(((omit, labels), node_id), contents)| Node {
             id: node_id,
             labels,
@@ -213,8 +215,8 @@ fn phandle() -> impl Parser<char, Phandle, Error = Simple<char>> + Clone {
     just('&').ignore_then(path.or(label))
 }
 
-fn node_label() -> impl Parser<char, String, Error = Simple<char>> + Clone {
-    text::ident()
+fn node_label() -> impl Parser<Token, String, Error = Simple<Token>> + Clone {
+    select! { Token::Ident(ident) => ident.clone() }
 }
 
 fn node_path() -> impl Parser<char, Vec<NodeName>, Error = Simple<char>> + Clone {

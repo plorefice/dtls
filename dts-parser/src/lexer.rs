@@ -2,8 +2,13 @@ use std::ops::Range;
 
 use chumsky::prelude::*;
 
-pub(crate) type Span = Range<usize>;
+/// The range of positions in the input text covered by a token.
+pub type Span = Range<usize>;
 
+/// A `T` augmented with information about its location in the source code.
+pub type Spanned<T> = (T, Span);
+
+/// A token in the DT grammar.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Token {
     Num(String),
@@ -20,7 +25,8 @@ pub(crate) enum Token {
     MemReserve,
 }
 
-pub(crate) fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
+/// Convert the input DT file into a spanned token stream.
+pub(crate) fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     // A parser for numbers in hexadecimal notation
     let hex = (just("0x").or(just("0X")))
         .map(String::from)
